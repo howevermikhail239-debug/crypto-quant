@@ -10,6 +10,7 @@ Covers:
 import os
 import tempfile
 import time
+from datetime import timedelta
 from pathlib import Path
 
 from crypto_quant.ingestion.gap_registry import GapRegistry, GapType
@@ -96,6 +97,104 @@ def test_retention_boundary_exactly_30d_kept():
         # result depends on sub-second race.  We assert the file still exists after
         # dry-run regardless.
         assert f.exists()
+
+
+# ---------------------------------------------------------------------------
+# PRE-1D FIX 1 — SEMANTIC COVERAGE AGE RESOLUTION TESTS
+# ---------------------------------------------------------------------------
+
+
+def test_retention_semantic_coverage_older_than_fresh_mtime():
+    """Old manifest coverage (40d ago) + fresh filesystem mtime (1h ago) -> ELIGIBLE & DELETED."""
+    import json
+    from crypto_quant.ingestion.retention import DeletionLedger
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        root = Path(tmp_dir)
+        raw_dir = root / "raw" / "ws"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        f = raw_dir / "recopied_ws_file.jsonl"
+        f.write_text("{}\n", encoding="utf-8")
+        # Fresh filesystem mtime (today)
+        now_ts = time.time()
+        os.utime(f, times=(now_ts, now_ts))
+
+        # Create manifest with old coverage_end (40 days ago)
+        manifest_dir = root / "control" / "manifests"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        mfile = manifest_dir / "raw_ws_manifest.jsonl"
+        old_cov = (utc_now() - timedelta(days=40)).isoformat()
+        mrec = {
+            "object_id": str(f.relative_to(root)),
+            "coverage_end": old_cov,
+            "action": "RECORDED",
+        }
+        mfile.write_text(json.dumps(mrec) + "\n", encoding="utf-8")
+
+        res = enforce_retention_policy(root, RetentionPolicy(raw_ws_envelope_days=30), dry_run=False)
+        assert res["raw_ws"] == 1
+        assert not f.exists(), "Old semantic coverage must cause deletion despite fresh mtime"
+
+        ledger = DeletionLedger(root)
+        deletions = ledger.list_deletions()
+        assert len(deletions) == 1
+        assert deletions[0].age_basis == "manifest_coverage_end"
+        assert deletions[0].semantic_age_timestamp == old_cov
+
+
+def test_retention_recent_coverage_with_old_mtime_kept():
+    """Recent manifest coverage (2d ago) + artificially old mtime (100d ago) -> KEPT."""
+    import json
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        root = Path(tmp_dir)
+        raw_dir = root / "raw" / "ws"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        f = raw_dir / "recent_stream.jsonl"
+        f.write_text("{}\n", encoding="utf-8")
+        # Artificially old mtime (100 days ago)
+        old_ts = time.time() - 100 * 86400
+        os.utime(f, times=(old_ts, old_ts))
+
+        # Manifest specifies recent coverage_end (2 days ago)
+        manifest_dir = root / "control" / "manifests"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        mfile = manifest_dir / "raw_ws_manifest.jsonl"
+        recent_cov = (utc_now() - timedelta(days=2)).isoformat()
+        mrec = {
+            "object_id": str(f.relative_to(root)),
+            "coverage_end": recent_cov,
+            "action": "RECORDED",
+        }
+        mfile.write_text(json.dumps(mrec) + "\n", encoding="utf-8")
+
+        res = enforce_retention_policy(root, RetentionPolicy(raw_ws_envelope_days=30), dry_run=False)
+        assert res["raw_ws"] == 0
+        assert f.exists(), "Recent semantic coverage must protect file from deletion despite old mtime"
+
+
+def test_retention_mtime_fallback_when_manifest_absent():
+    """When manifest is absent and filename has no date, falls back to filesystem mtime."""
+    from crypto_quant.ingestion.retention import DeletionLedger
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        root = Path(tmp_dir)
+        raw_dir = root / "raw" / "ws"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        f = raw_dir / "unindexed_file.jsonl"
+        f.write_text("{}\n", encoding="utf-8")
+        old_ts = time.time() - 35 * 86400
+        os.utime(f, times=(old_ts, old_ts))
+
+        res = enforce_retention_policy(root, RetentionPolicy(raw_ws_envelope_days=30), dry_run=False)
+        assert res["raw_ws"] == 1
+        assert not f.exists()
+
+        ledger = DeletionLedger(root)
+        deletions = ledger.list_deletions()
+        assert len(deletions) == 1
+        assert deletions[0].age_basis == "filesystem_mtime"
+
 
 
 # ---------------------------------------------------------------------------

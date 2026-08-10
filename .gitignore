@@ -13,5 +13,7 @@ build/
 *.partial
 *.tmp
 data/
+crypto_quant_data/
 logs/
 quarantine/
+*.antigravity_backup
