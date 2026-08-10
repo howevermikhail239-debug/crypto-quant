@@ -219,3 +219,115 @@ def test_ingest_binance_funding_rate_end_to_end():
         assert chk_file.exists()
         chk = json.loads(chk_file.read_text(encoding="utf-8"))
         assert chk["total_records"] == 2
+
+
+def test_funding_source_contracts_load_and_validate():
+    """Validates frozen YAML contracts for Binance Funding Rate and Funding Info."""
+    import yaml
+
+    contracts_dir = Path("schemas/contracts")
+    rate_contract_path = contracts_dir / "binance_usdm_funding_rate_rest_v1.yaml"
+    info_contract_path = contracts_dir / "binance_usdm_funding_info_rest_v1.yaml"
+
+    assert rate_contract_path.exists(), "Funding rate contract must exist"
+    assert info_contract_path.exists(), "Funding info contract must exist"
+
+    rate_data = yaml.safe_load(rate_contract_path.read_text(encoding="utf-8"))
+    assert rate_data["contract_id"] == "binance.usdm.rest.funding-rate.v1"
+    assert rate_data["exchange"] == "binance"
+    assert rate_data["market_type"] == "perpetual"
+    assert len(rate_data["fields"]) == 5
+
+    info_data = yaml.safe_load(info_contract_path.read_text(encoding="utf-8"))
+    assert info_data["contract_id"] == "binance.usdm.rest.funding-info.v1"
+    assert info_data["exchange"] == "binance"
+    assert len(info_data["fields"]) == 6
+
+
+def test_rerun_bootstrap_idempotent_without_rmtree():
+    """Proves re-running ingestion over existing dataset is idempotent without any rmtree."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        root = Path(tmp_dir)
+        mock_client = MagicMock()
+
+        resp_info = MagicMock()
+        resp_info.json.return_value = [{"symbol": "BTCUSDT", "fundingIntervalHours": 8}]
+
+        resp_rates = MagicMock()
+        resp_rates.json.return_value = [
+            {"symbol": "BTCUSDT", "fundingTime": 1786204800000, "fundingRate": "0.0001", "markPrice": "64000", "rateType": "Regular"},
+            {"symbol": "BTCUSDT", "fundingTime": 1786233600000, "fundingRate": "0.00015", "markPrice": "64200", "rateType": "Regular"},
+        ]
+        mock_client.get.side_effect = [resp_info, resp_rates, resp_info, resp_rates]
+
+        # 1. First Run
+        res1 = ingest_binance_funding_rate("BTCUSDT", root, client=mock_client)
+        assert res1["status"] == "PASS"
+        assert res1["records_count"] == 2
+
+        # 2. Second Run (re-run historical bootstrap without rmtree)
+        res2 = ingest_binance_funding_rate("BTCUSDT", root, client=mock_client)
+        assert res2["status"] == "PASS"
+        assert res2["records_count"] == 2
+
+        # Verify Parquet files count remains exactly 1 for the year
+        norm_dir = root / "normalized" / "funding" / "v1" / "exchange=binance" / "market_type=perpetual" / "symbol=BTCUSDT"
+        parquet_files = list(norm_dir.rglob("*.parquet"))
+        assert len(parquet_files) == 1, "Must not create duplicate files per year partition"
+
+        # Verify manifest has 2 records (both valid)
+        manifest_file = root / "control" / "manifests" / "binance_usdm_funding_rate.jsonl"
+        lines = [json.loads(line) for line in manifest_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert len(lines) == 2
+        assert lines[0]["row_count"] == 2
+        assert lines[1]["row_count"] == 2
+
+
+def test_funding_info_absence_does_not_invent_configured_interval():
+    """When symbol is absent from fundingInfo, configured_interval_minutes remains None."""
+    ident = funding_identity("BTCUSDT")
+    raw = {
+        "symbol": "BTCUSDT",
+        "fundingTime": 1786291200000,
+        "fundingRate": "0.00007054",
+        "rateType": "Regular",
+    }
+    rec = parse_binance_funding_rate_item(raw, ident, prev_funding_time=None)
+    assert rec.configured_interval_minutes is None
+    assert rec.observed_interval_minutes is None
+    assert rec.interval_source == "UNKNOWN"
+
+
+def test_special_rate_type_distinct_natural_key_collision_proof():
+    """Regular and Special events at the exact same fundingTime produce distinct natural keys."""
+    ident = funding_identity("BTCUSDT")
+    same_time = 1786291200000
+    raw_regular = {
+        "symbol": "BTCUSDT",
+        "fundingTime": same_time,
+        "fundingRate": "0.00010000",
+        "rateType": "Regular",
+    }
+    raw_special = {
+        "symbol": "BTCUSDT",
+        "fundingTime": same_time,
+        "fundingRate": "-0.00020000",
+        "rateType": "Special",
+    }
+
+    rec_reg = parse_binance_funding_rate_item(raw_regular, ident)
+    rec_spe = parse_binance_funding_rate_item(raw_special, ident)
+
+    key_reg = (rec_reg.exchange, rec_reg.instrument_id, rec_reg.funding_time, rec_reg.canonical_rate_type)
+    key_spe = (rec_spe.exchange, rec_spe.instrument_id, rec_spe.funding_time, rec_spe.canonical_rate_type)
+
+    assert key_reg != key_spe
+    assert key_reg[3] == "REGULAR"
+    assert key_spe[3] == "SPECIAL"
+    assert rec_reg.funding_rate == "0.00010000"
+    assert rec_spe.funding_rate == "-0.00020000"
+
+    # Both together do not produce DQ duplicate error
+    # (they have distinct rate_type)
+    seen_keys = {key_reg, key_spe}
+    assert len(seen_keys) == 2

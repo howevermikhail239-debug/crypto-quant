@@ -1,0 +1,25 @@
+contract_id: binance.usdm.rest.funding-rate.v1
+source_dataset_id: binance.usdm.funding_rate.rest
+exchange: binance
+market_type: perpetual
+contract_type: linear_perpetual
+source_kind: rest
+official_documentation_url: https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Get-Funding-Rate-History
+verified_at: "2026-08-10T00:00:00Z"
+schema_version: 1.0.0
+request_rules:
+  endpoint: /fapi/v1/fundingRate
+  timestamp_unit: ms
+  limit_max: 1000
+  traversal: ascending
+  boundary_semantics: "startTime and endTime are inclusive; next page start = last_ts + 1ms"
+fields:
+  - {source_field: symbol, semantic_meaning: contract_symbol, source_unit: string, nullable: false, canonical_field: symbol, transformation: exact_match, normalized_unit: symbol}
+  - {source_field: fundingTime, semantic_meaning: settlement_time, source_unit: epoch_ms, nullable: false, canonical_field: funding_time, transformation: epoch_ms_to_utc, normalized_unit: UTC}
+  - {source_field: fundingRate, semantic_meaning: realized_funding_rate_fraction, source_unit: decimal_fraction, nullable: false, canonical_field: funding_rate, transformation: string_to_decimal_raw_fraction, normalized_unit: decimal_fraction}
+  - {source_field: markPrice, semantic_meaning: mark_price_at_settlement, source_unit: USDT, nullable: true, canonical_field: mark_price, transformation: string_to_decimal_or_none, normalized_unit: USDT}
+  - {source_field: rateType, semantic_meaning: rate_classification, source_unit: string, nullable: true, canonical_field: source_rate_type, transformation: uppercase_canonical, normalized_unit: classification_enum}
+known_limitations:
+  - "Historical knowledge_time is unknown; settlement timestamp is not guaranteed instantaneous market availability."
+  - "Early historical records (e.g. 2019) may return empty string for markPrice."
+  - "rateType was introduced later; absent rateType maps source_rate_type='Regular', canonical_rate_type='REGULAR'."

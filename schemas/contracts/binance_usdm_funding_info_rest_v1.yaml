@@ -1,0 +1,23 @@
+contract_id: binance.usdm.rest.funding-info.v1
+source_dataset_id: binance.usdm.funding_info.rest
+exchange: binance
+market_type: perpetual
+contract_type: linear_perpetual
+source_kind: rest
+official_documentation_url: https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Get-Funding-Rate-Info
+verified_at: "2026-08-10T00:00:00Z"
+schema_version: 1.0.0
+request_rules:
+  endpoint: /fapi/v1/fundingInfo
+  method: GET
+  semantics: "Point-in-time snapshot of configured funding rules and active rate caps/floors"
+fields:
+  - {source_field: symbol, semantic_meaning: contract_symbol, source_unit: string, nullable: false, canonical_field: symbol, transformation: exact_match, normalized_unit: symbol}
+  - {source_field: adjustedFundingRateCap, semantic_meaning: adjusted_funding_cap, source_unit: decimal_fraction, nullable: true, canonical_field: adjusted_cap, transformation: string_to_decimal, normalized_unit: decimal_fraction}
+  - {source_field: adjustedFundingRateFloor, semantic_meaning: adjusted_funding_floor, source_unit: decimal_fraction, nullable: true, canonical_field: adjusted_floor, transformation: string_to_decimal, normalized_unit: decimal_fraction}
+  - {source_field: fundingIntervalHours, semantic_meaning: configured_interval_hours, source_unit: hours, nullable: true, canonical_field: configured_interval_hours, transformation: integer, normalized_unit: hours}
+  - {source_field: disclaimer, semantic_meaning: disclaimer_flag, source_unit: boolean, nullable: true, canonical_field: disclaimer, transformation: boolean, normalized_unit: boolean}
+  - {source_field: updateTime, semantic_meaning: last_rule_update_timestamp, source_unit: epoch_ms, nullable: true, canonical_field: update_time, transformation: epoch_ms_to_utc_or_none, normalized_unit: UTC}
+known_limitations:
+  - "Point-in-time snapshot only; must never be backfilled as historical ground truth across prior years."
+  - "Absence of symbol in fundingInfo response indicates standard default rules (no special cap adjustment active), not an ingestion defect."
