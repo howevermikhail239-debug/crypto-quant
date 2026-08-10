@@ -77,10 +77,19 @@ def compute_collector_health(
     symbol: str,
     root: Path,
     current_availability: AvailabilityStatus = AvailabilityStatus.HEALTHY,
+    last_message_age_sec: float | None = None,
+    liveness_threshold_sec: float = 60.0,
     warning_disk_gb: float = 100.0,
     critical_disk_gb: float = 50.0,
 ) -> CollectorHealthState:
-    """Evaluates operational availability, completeness, and disk thresholds."""
+    """Evaluates operational availability, completeness, stale feed liveness, and disk thresholds."""
+    # Stale Feed Liveness Check
+    if (
+        current_availability == AvailabilityStatus.HEALTHY
+        and last_message_age_sec is not None
+        and last_message_age_sec > liveness_threshold_sec
+    ):
+        current_availability = AvailabilityStatus.DEGRADED
     registry = GapRegistry(root)
     all_gaps = registry.list_gaps()
 

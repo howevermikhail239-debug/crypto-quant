@@ -110,3 +110,18 @@ def test_collector_health_evaluation():
         assert health.completeness == CompletenessStatus.GAPPED
         assert health.open_gap_count == 1
         assert health.disk_status == DiskThresholdStatus.OK
+
+
+def test_health_stale_feed_liveness_transition():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        root = Path(tmp_dir)
+        health = compute_collector_health(
+            exchange="binance",
+            market_type="spot",
+            symbol="BTCUSDT",
+            root=root,
+            current_availability=AvailabilityStatus.HEALTHY,
+            last_message_age_sec=120.0,  # Exceeds default 60s liveness threshold
+            liveness_threshold_sec=60.0,
+        )
+        assert health.availability == AvailabilityStatus.DEGRADED

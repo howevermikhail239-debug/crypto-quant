@@ -1,13 +1,16 @@
-"""Retention Policy, Hold Management, and Deletion Ledger (Phase 1C Item 7E Audit).
+"""Retention Policy, Hold Management, Audit Trail, and Deletion Ledger (Phase 1C Item 7E Final Audit).
 
-Enforces retention policies with explicit hold management, gap status protection,
-and append-only audit logging:
+Enforces retention policies with explicit hold management, gap/conflict evidence protection,
+append-only hold event logs, and append-only deletion ledgers:
 - Raw WS Envelopes (raw/ws/): 30 days retention
 - Normalized Realtime Trades (normalized/realtime/): 30 days retention
+- Normalized Historical Archives (normalized/individual_trade/v1/): Permanent
 - 1s and 5s Derived Buckets (derived/trade_bucket/.../granularity=1s|5s): 90 days retention
 - 1m Derived Buckets (derived/trade_bucket/.../granularity=60s): Permanent (NEVER deleted)
-- Active Holds & Open/Partial Gap artifacts: Protected from deletion.
-- Deletion Ledger: Append-only JSONL log under control/retention/v1/deletion_ledger.jsonl
+- Active Holds, Open/Partial Gaps, and Reconciliation Conflict Evidence: Fully protected from deletion.
+- Append-Only Auditing:
+  - Deletion Ledger: control/retention/v1/deletion_ledger.jsonl
+  - Hold Events Audit: control/retention/v1/hold_events.jsonl
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from typing import Any
 from ..hashing import sha256_text
 from ..time import utc_now
 from .gap_registry import GapRegistry, GapStatus
+from .reconciliation import ReconciliationRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -47,28 +51,82 @@ class RetentionHold:
     active: bool = True
 
 
+@dataclass
+class HoldEvent:
+    event_id: str
+    action: str  # CREATED, REMOVED
+    hold_id: str
+    hold_type: str
+    target_ref: str
+    reason: str
+    timestamp: datetime
+
+    def to_dict(self) -> dict[str, Any]:
+        res = asdict(self)
+        res["timestamp"] = self.timestamp.isoformat()
+        return res
+
+
 class HoldRegistry:
-    """Manages active retention holds in control/retention/v1/retention_holds.json."""
+    """Manages active retention holds and append-only audit event trail in control/retention/v1/."""
 
     def __init__(self, root: Path) -> None:
         self.root = root
         self.dir_path = root / "control" / "retention" / "v1"
         self.holds_file = self.dir_path / "retention_holds.json"
+        self.hold_events_file = self.dir_path / "hold_events.jsonl"
         self.dir_path.mkdir(parents=True, exist_ok=True)
 
     def add_hold(self, hold_type: HoldType, target_ref: str, reason: str) -> RetentionHold:
         holds = self.list_holds()
+        hold_id = f"hold_{uuid.uuid4().hex[:12]}"
+        now = utc_now()
+
         hold = RetentionHold(
-            hold_id=f"hold_{uuid.uuid4().hex[:12]}",
+            hold_id=hold_id,
             hold_type=hold_type,
             target_ref=target_ref,
             reason=reason,
-            created_at=utc_now(),
+            created_at=now,
             active=True,
         )
         holds.append(hold)
         self._save_holds(holds)
+
+        # Audit Event Log
+        evt = HoldEvent(
+            event_id=f"evt_{uuid.uuid4().hex[:12]}",
+            action="CREATED",
+            hold_id=hold_id,
+            hold_type=hold_type.value,
+            target_ref=target_ref,
+            reason=reason,
+            timestamp=now,
+        )
+        self._record_hold_event(evt)
         return hold
+
+    def remove_hold(self, hold_id: str, reason: str) -> bool:
+        holds = self.list_holds()
+        target_hold = next((h for h in holds if h.hold_id == hold_id and h.active), None)
+        if target_hold is None:
+            return False
+
+        target_hold.active = False
+        self._save_holds(holds)
+
+        now = utc_now()
+        evt = HoldEvent(
+            event_id=f"evt_{uuid.uuid4().hex[:12]}",
+            action="REMOVED",
+            hold_id=hold_id,
+            hold_type=target_hold.hold_type.value,
+            target_ref=target_hold.target_ref,
+            reason=reason,
+            timestamp=now,
+        )
+        self._record_hold_event(evt)
+        return True
 
     def is_held(self, target_ref: str) -> bool:
         return any(h.active and h.target_ref in target_ref for h in self.list_holds())
@@ -97,6 +155,13 @@ class HoldRegistry:
             d["created_at"] = h.created_at.isoformat()
             serialized.append(d)
         self.holds_file.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
+
+    def _record_hold_event(self, event: HoldEvent) -> None:
+        line = json.dumps(event.to_dict(), sort_keys=True) + "\n"
+        with self.hold_events_file.open("a", encoding="utf-8") as f:
+            f.write(line)
+            f.flush()
+            os.fsync(f.fileno())
 
 
 @dataclass
@@ -134,6 +199,19 @@ class DeletionLedger:
             f.flush()
             os.fsync(f.fileno())
 
+    def list_deletions(self) -> list[DeletionRecord]:
+        if not self.ledger_file.exists():
+            return []
+        recs = []
+        with self.ledger_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    data = json.loads(line)
+                    data["deleted_at"] = datetime.fromisoformat(data["deleted_at"])
+                    recs.append(DeletionRecord(**data))
+        return recs
+
 
 @dataclass(frozen=True)
 class RetentionPolicy:
@@ -155,10 +233,22 @@ def enforce_retention_policy(
     hold_reg = HoldRegistry(root)
     ledger = DeletionLedger(root)
     gap_reg = GapRegistry(root)
+    rec_reg = ReconciliationRegistry(root)
 
-    # Protect open/partial gap artifacts
+    # 1. Protect unresolved gap artifacts (OPEN, PARTIAL, UNKNOWN)
     unresolved_gaps = gap_reg.list_gaps()
-    unresolved_gap_ids = {g.gap_id for g in unresolved_gaps if g.status in (GapStatus.OPEN, GapStatus.PARTIAL, GapStatus.UNKNOWN)}
+    unresolved_gap_ids = {
+        g.gap_id for g in unresolved_gaps if g.status in (GapStatus.OPEN, GapStatus.PARTIAL, GapStatus.UNKNOWN)
+    }
+
+    # 2. Protect unresolved reconciliation conflict evidence
+    unresolved_reconciliations = rec_reg.list_reconciliations()
+    conflict_trade_ids = set()
+    for r in unresolved_reconciliations:
+        if not r.coverage_proven or r.status != "MATCH":
+            for d in r.discrepancy_details:
+                if d.get("trade_id"):
+                    conflict_trade_ids.add(str(d["trade_id"]))
 
     pruned_counts = {
         "raw_ws": 0,
@@ -167,10 +257,18 @@ def enforce_retention_policy(
         "minute_buckets": 0,
     }
 
-    # Helper evaluator
     def _evaluate_file(path: Path, max_days: int, category: str, dataset_class: str) -> None:
-        if hold_reg.is_held(path.name) or any(gid in path.name for gid in unresolved_gap_ids):
-            logger.info(f"Preserving held/gap-related artifact: {path.name}")
+        # Check active holds, open/partial gaps, and conflict evidence
+        if hold_reg.is_held(path.name):
+            logger.info(f"Preserving held artifact: {path.name}")
+            return
+
+        if any(gid in path.name for gid in unresolved_gap_ids):
+            logger.info(f"Preserving gap evidence artifact: {path.name}")
+            return
+
+        if any(tid in path.name for tid in conflict_trade_ids):
+            logger.info(f"Preserving reconciliation conflict evidence artifact: {path.name}")
             return
 
         try:
