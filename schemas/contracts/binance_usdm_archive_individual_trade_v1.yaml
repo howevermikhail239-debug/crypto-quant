@@ -1,0 +1,23 @@
+contract_id: binance.usdm.archive.individual-trade.6col-ms.v1
+source_dataset_id: binance.usdm.individual_trade.archive
+exchange: binance
+market_type: perpetual
+contract_type: linear_perpetual
+source_kind: daily_archive
+official_documentation_url: https://github.com/binance/binance-public-data/blob/master/README.md
+verified_at: "2026-08-10T00:00:00Z"
+schema_version: 1.0.0
+request_rules:
+  uri_template: "https://data.binance.vision/data/futures/um/daily/trades/{symbol}/{symbol}-trades-{YYYY-MM-DD}.zip"
+  checksum_sidecar: ".CHECKSUM"
+  timestamp_unit_policy: "epoch milliseconds in the observed 2026-07-01 USD-M objects"
+  exact_header: [id, price, qty, quote_qty, time, is_buyer_maker]
+fields:
+  - {source_field: id, semantic_meaning: exchange individual trade identifier, source_unit: identifier, nullable: false, canonical_field: native_trade_id, transformation: string_preserving, normalized_unit: identifier}
+  - {source_field: price, semantic_meaning: execution price, source_unit: USDT_per_base, nullable: false, canonical_field: price, transformation: string_to_decimal, normalized_unit: USDT_per_base}
+  - {source_field: qty, semantic_meaning: executed base-asset quantity for USD-M linear perpetual, source_unit: base_asset, nullable: false, canonical_field: quantity, transformation: string_to_decimal, normalized_unit: base_asset}
+  - {source_field: quote_qty, semantic_meaning: executed quote notional, source_unit: USDT, nullable: false, canonical_field: quote_quantity, transformation: string_to_decimal, normalized_unit: USDT}
+  - {source_field: time, semantic_meaning: trade execution timestamp, source_unit: epoch_ms, nullable: false, canonical_field: event_time, transformation: explicit_ms_to_utc, normalized_unit: UTC}
+  - {source_field: is_buyer_maker, semantic_meaning: whether buyer supplied resting liquidity, source_unit: boolean, nullable: false, canonical_field: taker_side, transformation: "true->SELL; false->BUY; fixture-gated", normalized_unit: side}
+absent_fields:
+  - {canonical_field: is_rpi_trade, value: null, reason: "not present in exact observed six-column archive schema"}

@@ -1,0 +1,46 @@
+[project]
+name = "crypto-quant-foundation"
+version = "0.1.0"
+description = "Local-first foundation for the Crypto Quant research system"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "httpx>=0.28,<1",
+  "pydantic>=2.10,<3",
+  "pydantic-settings>=2.7,<3",
+  "pyarrow>=18,<23",
+  "PyYAML>=6.0,<7",
+]
+
+[project.scripts]
+crypto-quant = "crypto_quant.cli:main"
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-cov>=6.0,<7",
+  "ruff>=0.9,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/crypto_quant"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers --cov=crypto_quant --cov-report=term-missing"
+
+[tool.coverage.run]
+branch = true
+source = ["crypto_quant"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]

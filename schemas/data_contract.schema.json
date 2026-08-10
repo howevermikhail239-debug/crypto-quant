@@ -1,0 +1,150 @@
+{
+  "$defs": {
+    "ContractField": {
+      "additionalProperties": false,
+      "properties": {
+        "source_field": {
+          "title": "Source Field",
+          "type": "string"
+        },
+        "semantic_meaning": {
+          "title": "Semantic Meaning",
+          "type": "string"
+        },
+        "source_unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Unit"
+        },
+        "timestamp_meaning": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timestamp Meaning"
+        },
+        "nullable": {
+          "title": "Nullable",
+          "type": "boolean"
+        },
+        "canonical_field": {
+          "title": "Canonical Field",
+          "type": "string"
+        },
+        "transformation": {
+          "title": "Transformation",
+          "type": "string"
+        },
+        "normalized_unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalized Unit"
+        },
+        "validation_rules": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Validation Rules",
+          "type": "array"
+        },
+        "known_limitations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Known Limitations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "source_field",
+        "semantic_meaning",
+        "nullable",
+        "canonical_field",
+        "transformation"
+      ],
+      "title": "ContractField",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contract_id": {
+      "pattern": "^[a-z0-9][a-z0-9._-]+$",
+      "title": "Contract Id",
+      "type": "string"
+    },
+    "source_dataset_id": {
+      "title": "Source Dataset Id",
+      "type": "string"
+    },
+    "exchange": {
+      "title": "Exchange",
+      "type": "string"
+    },
+    "market_type": {
+      "title": "Market Type",
+      "type": "string"
+    },
+    "source_kind": {
+      "title": "Source Kind",
+      "type": "string"
+    },
+    "official_documentation_url": {
+      "format": "uri",
+      "maxLength": 2083,
+      "minLength": 1,
+      "title": "Official Documentation Url",
+      "type": "string"
+    },
+    "verified_at": {
+      "format": "date-time",
+      "title": "Verified At",
+      "type": "string"
+    },
+    "schema_version": {
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "fields": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ContractField"
+      },
+      "title": "Fields",
+      "type": "array"
+    }
+  },
+  "required": [
+    "contract_id",
+    "source_dataset_id",
+    "exchange",
+    "market_type",
+    "source_kind",
+    "official_documentation_url",
+    "verified_at",
+    "schema_version"
+  ],
+  "title": "DataContract",
+  "type": "object"
+}

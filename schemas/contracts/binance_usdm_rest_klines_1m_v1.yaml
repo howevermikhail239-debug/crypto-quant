@@ -1,0 +1,23 @@
+contract_id: binance.usdm.rest.klines.1m.v1
+source_dataset_id: binance.usdm.klines.1m.rest
+exchange: binance
+market_type: derivative
+contract_type: linear_perpetual
+source_kind: rest
+official_documentation_url: https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Kline-Candlestick-Data
+verified_at: "2026-08-10T00:00:00Z"
+schema_version: 1.0.0
+request_rules: {endpoint: /fapi/v1/klines, timestamp_unit: ms, limit_max: 1500, finality: "closeTime < conservative cutoff"}
+fields:
+  - {source_field: "[0]", semantic_meaning: open_time, source_unit: epoch_ms, nullable: false, canonical_field: open_time, transformation: epoch_ms_to_utc, normalized_unit: UTC}
+  - {source_field: "[1]", semantic_meaning: open, source_unit: USDT_per_BTC, nullable: false, canonical_field: open, transformation: string_to_decimal, normalized_unit: USDT_per_BTC}
+  - {source_field: "[2]", semantic_meaning: high, source_unit: USDT_per_BTC, nullable: false, canonical_field: high, transformation: string_to_decimal, normalized_unit: USDT_per_BTC}
+  - {source_field: "[3]", semantic_meaning: low, source_unit: USDT_per_BTC, nullable: false, canonical_field: low, transformation: string_to_decimal, normalized_unit: USDT_per_BTC}
+  - {source_field: "[4]", semantic_meaning: close, source_unit: USDT_per_BTC, nullable: false, canonical_field: close, transformation: string_to_decimal, normalized_unit: USDT_per_BTC}
+  - {source_field: "[5]", semantic_meaning: volume, source_unit: base_asset, nullable: false, canonical_field: base_volume, transformation: string_to_decimal, normalized_unit: base_asset}
+  - {source_field: "[6]", semantic_meaning: close_time, source_unit: epoch_ms, nullable: false, canonical_field: close_time, transformation: epoch_ms_to_utc, normalized_unit: UTC}
+  - {source_field: "[7]", semantic_meaning: quote_volume, source_unit: USDT, nullable: false, canonical_field: quote_volume, transformation: string_to_decimal, normalized_unit: USDT}
+  - {source_field: "[8]", semantic_meaning: trade_count, source_unit: count, nullable: false, canonical_field: trade_count, transformation: integer, normalized_unit: count}
+  - {source_field: "[9]", semantic_meaning: taker_buy_base_volume, source_unit: base_asset, nullable: false, canonical_field: taker_buy_base_volume, transformation: string_to_decimal, normalized_unit: base_asset}
+  - {source_field: "[10]", semantic_meaning: taker_buy_quote_volume, source_unit: USDT, nullable: false, canonical_field: taker_buy_quote_volume, transformation: string_to_decimal, normalized_unit: USDT}
+  - {source_field: "[11]", semantic_meaning: ignored, source_unit: null, nullable: true, canonical_field: ignored_source_field, transformation: retain_raw_only, normalized_unit: null}

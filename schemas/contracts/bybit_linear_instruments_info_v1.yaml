@@ -1,0 +1,30 @@
+contract_id: bybit.linear.instruments-info.v1
+official_documentation: https://bybit-exchange.github.io/docs/v5/market/instrument
+request: {category: linear, symbol: explicit}
+envelope_fields:
+  - {source_field: retCode, semantic: application_status, unit: code, nullable: false, validation: equals_0}
+  - {source_field: retMsg, semantic: application_message, unit: text, nullable: false}
+  - {source_field: result.category, semantic: native_market_category, unit: enum, nullable: false, validation: equals_linear}
+  - {source_field: result.nextPageCursor, semantic: pagination_cursor, unit: text, nullable: false, limitation: pagination_required_for_full_inventory}
+  - {source_field: retExtInfo, semantic: extension_envelope, unit: json, nullable: false}
+  - {source_field: time, semantic: response_generation_time, unit: epoch_ms, nullable: false}
+fields:
+  - {source_field: symbol, canonical_field: native_symbol, unit: symbol, nullable: false, validation: requested_symbol}
+  - {source_field: contractType, canonical_field: contract_type, unit: enum, nullable: false, transformation: LinearPerpetual_to_linear_perpetual}
+  - {source_field: status, canonical_field: status, unit: enum, nullable: false}
+  - {source_field: baseCoin, canonical_field: base_asset, unit: asset_code, nullable: false}
+  - {source_field: quoteCoin, canonical_field: quote_asset, unit: asset_code, nullable: false}
+  - {source_field: settleCoin, canonical_field: settle_asset, unit: asset_code, nullable: false}
+  - {source_field: launchTime, canonical_field: listing_time, unit: epoch_ms, nullable: false, limitation: not_coverage_proof}
+  - {source_field: deliveryTime, canonical_field: delivery_time, unit: epoch_ms, nullable: false}
+  - {source_field: fundingInterval, canonical_field: source_metadata.funding_interval_minutes, unit: minute, nullable: true}
+  - {source_field: priceFilter.minPrice, canonical_field: source_metadata.min_price, unit: quote_per_base, nullable: true}
+  - {source_field: priceFilter.maxPrice, canonical_field: source_metadata.max_price, unit: quote_per_base, nullable: true}
+  - {source_field: priceFilter.tickSize, canonical_field: price_tick, unit: quote_per_base, nullable: false, transformation: Decimal}
+  - {source_field: lotSizeFilter.minOrderQty, canonical_field: source_metadata.min_order_qty, unit: base_asset, nullable: false}
+  - {source_field: lotSizeFilter.maxOrderQty, canonical_field: source_metadata.max_order_qty, unit: base_asset, nullable: false}
+  - {source_field: lotSizeFilter.qtyStep, canonical_field: quantity_step, unit: base_asset, nullable: false, transformation: Decimal}
+  - {source_field: lotSizeFilter.minNotionalValue, canonical_field: source_metadata.min_order_notional, unit: quote_asset, nullable: true}
+  - {source_field: leverageFilter.minLeverage, canonical_field: source_metadata.min_leverage, unit: ratio, nullable: true}
+  - {source_field: leverageFilter.maxLeverage, canonical_field: source_metadata.max_leverage, unit: ratio, nullable: true}
+  - {source_field: leverageFilter.leverageStep, canonical_field: source_metadata.leverage_step, unit: ratio, nullable: true}

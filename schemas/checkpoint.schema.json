@@ -1,0 +1,68 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "checkpoint_id": {
+      "title": "Checkpoint Id",
+      "type": "string"
+    },
+    "source_dataset_id": {
+      "title": "Source Dataset Id",
+      "type": "string"
+    },
+    "instrument_id": {
+      "title": "Instrument Id",
+      "type": "string"
+    },
+    "committed_at": {
+      "format": "date-time",
+      "title": "Committed At",
+      "type": "string"
+    },
+    "cursor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cursor"
+    },
+    "last_event_time": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Event Time"
+    },
+    "last_knowledge_time": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Knowledge Time"
+    }
+  },
+  "required": [
+    "checkpoint_id",
+    "source_dataset_id",
+    "instrument_id",
+    "committed_at"
+  ],
+  "title": "Checkpoint",
+  "type": "object"
+}

@@ -1,0 +1,82 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "deletion_id": {
+      "title": "Deletion Id",
+      "type": "string"
+    },
+    "object_id": {
+      "title": "Object Id",
+      "type": "string"
+    },
+    "planned_at": {
+      "format": "date-time",
+      "title": "Planned At",
+      "type": "string"
+    },
+    "deleted_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Deleted At"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "coverage_start": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Coverage Start"
+    },
+    "coverage_end": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Coverage End"
+    },
+    "checksum_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Checksum Sha256"
+    }
+  },
+  "required": [
+    "deletion_id",
+    "object_id",
+    "planned_at",
+    "reason"
+  ],
+  "title": "DeletionRecord",
+  "type": "object"
+}

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crypto-quant.local/schemas/future-signal/0.2.0-draft",
+  "title": "Future Canonical Signal and Trade Lifecycle Revision Contract (DRAFT; no runtime implementation)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "signal_id", "revision_id", "parent_revision_id", "revision_number", "revision_timestamp", "knowledge_time", "decision", "directional_probabilities", "scenario_state", "target_progress", "management_mode", "position_action", "model_confidence", "trade_risk", "invalidation", "time_context", "review", "revision_changes", "evidence_hashes", "method_version", "localized_explanation_key"],
+  "properties": {
+    "schema_version": {"const": "0.2.0-draft"},
+    "signal_id": {"type": "string", "minLength": 1},
+    "revision_id": {"type": "string", "minLength": 1},
+    "parent_revision_id": {"type": ["string", "null"]},
+    "revision_number": {"type": "integer", "minimum": 1},
+    "revision_timestamp": {"type": "string", "format": "date-time"},
+    "knowledge_time": {"type": "string", "format": "date-time"},
+    "decision": {"enum": ["LONG", "SHORT", "NO_TRADE"]},
+    "directional_probabilities": {"type": "object", "additionalProperties": false, "required": ["up", "neutral", "down", "model_version", "calibration_version"], "properties": {"up": {"type": ["number", "null"], "minimum": 0, "maximum": 1}, "neutral": {"type": ["number", "null"], "minimum": 0, "maximum": 1}, "down": {"type": ["number", "null"], "minimum": 0, "maximum": 1}, "model_version": {"type": "string"}, "calibration_version": {"type": ["string", "null"]}}},
+    "scenario_state": {"enum": ["NEW", "ACTIVE", "STRENGTHENED", "WEAKENED", "TP1_REACHED", "TP2_REACHED", "TP3_REACHED", "TRAILING", "INVALIDATED", "EXIT_RECOMMENDED", "CLOSED", "EXPIRED"]},
+    "entry_price": {"type": ["string", "null"], "description": "Decimal string; null for NO_TRADE."},
+    "model_confidence": {"enum": ["LOW", "MODERATE", "HIGH", "UNKNOWN"]},
+    "trade_risk": {"enum": ["LOW", "MODERATE", "HIGH", "VERY_HIGH", "EXTREME", "UNKNOWN"]},
+    "trade_risk_score": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+    "opportunity_score": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+    "expected_value_after_costs": {"type": ["number", "null"]},
+    "invalidation": {"type": "object", "additionalProperties": false, "required": ["types", "level", "timeframe", "condition"], "properties": {"types": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["PRICE", "STRUCTURE", "FEATURE", "TIME", "COMPOSITE"]}}, "level": {"type": ["string", "null"]}, "timeframe": {"type": ["string", "null"]}, "condition": {"type": "string", "minLength": 1}}},
+    "time_context": {"type": "object", "additionalProperties": false, "required": ["signal_created_at", "signal_horizon", "expected_holding_time", "maximum_holding_time", "next_review_at", "scenario_expiry_at"], "properties": {"signal_created_at": {"type": "string", "format": "date-time"}, "signal_horizon": {"enum": ["1H", "4H", "12H", "24H", "CUSTOM"]}, "expected_holding_time": {"type": "string", "minLength": 1, "description": "Versioned machine duration/range, not a promise of exact timing."}, "maximum_holding_time": {"type": "string", "minLength": 1, "description": "Versioned maximum duration."}, "next_review_at": {"type": ["string", "null"], "format": "date-time"}, "scenario_expiry_at": {"type": "string", "format": "date-time"}}},
+    "review": {"type": "object", "additionalProperties": false, "required": ["trigger", "reason"], "properties": {"trigger": {"enum": ["INITIAL", "SCHEDULED", "PRICE_SHOCK", "TARGET_REACHED", "STOP_PROXIMITY", "REGIME_CHANGE", "CVD_CHANGE", "OI_SHOCK", "FUNDING_EXTREME", "LIQUIDATION_CASCADE", "ORDERBOOK_BREAK", "EVENT_RISK", "DATA_QUALITY_DEGRADATION", "SECURITY_LIQUIDITY_EVENT", "MANUAL_AUDIT"]}, "reason": {"type": "string", "minLength": 1}}},
+    "evidence_hashes": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-f0-9]{64}$"}},
+    "stop_loss": {"type": ["object", "null"], "additionalProperties": false, "required": ["price", "action", "method_version"], "properties": {"price": {"type": ["string", "null"]}, "action": {"enum": ["KEEP_STOP", "TIGHTEN_STOP", "MOVE_TO_BREAK_EVEN", "TRAIL_STOP", "CANCEL_STOP_AND_EXIT"]}, "method_version": {"type": "string", "minLength": 1}}},
+    "targets": {"type": "array", "items": {"$ref": "#/$defs/target"}, "maxItems": 3},
+    "target_progress": {"enum": ["NONE", "TP1", "TP2", "TP3"], "description": "Monotonic highest reached target; per-target status remains in targets."},
+    "management_mode": {"enum": ["STATIC", "DYNAMIC", "PROFIT_PROTECTION", "EXIT_ONLY", "NONE"]},
+    "position_action": {"enum": ["HOLD", "OPEN_PROPOSED", "REDUCE", "CLOSE_PARTIAL", "CLOSE_FULL", "NO_ACTION", "NO_TRADE"]},
+    "position_action_fraction": {"type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1},
+    "revision_changes": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["field_path", "previous_value", "new_value", "reason_code", "localized_explanation_key"], "properties": {"field_path": {"type": "string", "minLength": 1}, "previous_value": {}, "new_value": {}, "reason_code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]+$"}, "localized_explanation_key": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]+$"}}}},
+    "risk": {"type": "object", "additionalProperties": false, "properties": {"risk_per_trade_pct": {"type": ["number", "null"]}, "position_size": {"type": ["string", "null"]}, "expected_slippage": {"type": ["string", "null"]}, "estimated_loss_if_stopped": {"type": ["string", "null"]}, "hard_gates": {"type": "array", "uniqueItems": true, "items": {"enum": ["DATA_QUALITY_FAILURE", "SECURITY_HIGH_RISK", "LIQUIDITY_TOO_LOW", "EXPECTED_SLIPPAGE_TOO_HIGH", "MODEL_OOD"]}}}},
+    "method_version": {"type": "string", "minLength": 1},
+    "localized_explanation_key": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]+$"},
+    "polymarket_context": {"type": ["object", "null"], "description": "Reserved optional external-event context; no execution semantics.", "additionalProperties": false, "properties": {"status": {"enum": ["NOT_COLLECTED", "NEUTRAL", "AVAILABLE", "UNAVAILABLE"]}, "event_refs": {"type": "array", "items": {"type": "string"}}, "interface_version": {"const": "0.1.0-draft"}}}
+  },
+  "allOf": [
+    {"if": {"properties": {"decision": {"const": "NO_TRADE"}}, "required": ["decision"]}, "then": {"properties": {"entry_price": {"type": "null"}, "stop_loss": {"type": "null"}, "position_action": {"enum": ["NO_TRADE", "NO_ACTION"]}, "management_mode": {"const": "NONE"}, "targets": {"maxItems": 0}, "target_progress": {"const": "NONE"}}}},
+    {"if": {"properties": {"risk": {"properties": {"hard_gates": {"minItems": 1}}, "required": ["hard_gates"]}}, "required": ["risk"]}, "then": {"properties": {"decision": {"const": "NO_TRADE"}}}},
+    {"if": {"properties": {"trade_risk": {"const": "EXTREME"}}, "required": ["trade_risk"]}, "then": {"properties": {"decision": {"const": "NO_TRADE"}}}},
+    {"if": {"properties": {"scenario_state": {"enum": ["INVALIDATED", "CLOSED", "EXPIRED"]}}, "required": ["scenario_state"]}, "then": {"properties": {"time_context": {"properties": {"next_review_at": {"type": "null"}}, "required": ["next_review_at"]}}}}
+  ],
+  "$defs": {
+    "target": {"type": "object", "additionalProperties": false, "required": ["target_id", "scenario_role", "status", "price", "probability", "expected_time", "risk_reward"], "properties": {"target_id": {"enum": ["TP1", "TP2", "TP3"]}, "scenario_role": {"enum": ["CONSERVATIVE", "BASE", "AGGRESSIVE"]}, "status": {"enum": ["PENDING", "REACHED", "CANCELLED", "SUPERSEDED"]}, "price": {"type": ["string", "null"]}, "probability": {"type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "Path-dependent target-hit-before-stop probability."}, "expected_time": {"type": ["string", "null"]}, "risk_reward": {"type": ["number", "null"]}}}
+  }
+}

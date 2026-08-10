@@ -1,0 +1,75 @@
+contract_id: binance.spot.ohlcv.1m.v1
+source_dataset_id: binance.spot.klines.1m
+exchange: binance
+market_type: spot
+source_kind: archive_and_rest
+official_documentation_url: https://developers.binance.com/docs/binance-spot-api-docs/rest-api/market-data-endpoints#klinecandlestick-data
+verified_at: "2026-08-10T00:00:00Z"
+schema_version: 1.0.0
+semantics:
+  identity: "BTCUSDT spot is distinct from every derivatives instrument."
+  availability: "Historical archive retrieval time is not market knowledge time."
+  close: "A row is eligible only after close_time; open candles are never persisted."
+  interval: "1m; close_time must equal open_time + 59,999 ms."
+fields:
+  - source_field: "[0]"
+    semantic_meaning: candle open time
+    source_unit: milliseconds since Unix epoch before 2025-01-01; microseconds thereafter in archives
+    timestamp_meaning: start of the 1m interval
+    nullable: false
+    canonical_field: open_time
+    transformation: explicit_epoch_unit_to_utc_timestamp
+    normalized_unit: UTC timestamp
+    validation_rules: [aligned_to_1m]
+  - source_field: "[1..4]"
+    semantic_meaning: open, high, low, close price
+    source_unit: quote asset per base asset
+    nullable: false
+    canonical_field: open/high/low/close
+    transformation: string_to_decimal
+    normalized_unit: USDT per BTC
+    validation_rules: [positive, "low <= open/high/close <= high"]
+  - source_field: "[5]"
+    semantic_meaning: traded base volume
+    source_unit: base asset
+    nullable: false
+    canonical_field: base_volume
+    transformation: string_to_decimal
+    normalized_unit: BTC
+    validation_rules: [nonnegative]
+  - source_field: "[6]"
+    semantic_meaning: candle close time
+    source_unit: milliseconds since Unix epoch before 2025-01-01; microseconds thereafter in archives
+    nullable: false
+    canonical_field: close_time
+    transformation: explicit_epoch_unit_to_utc_timestamp
+    normalized_unit: UTC timestamp
+    validation_rules: [open_plus_59999ms]
+  - source_field: "[7]"
+    semantic_meaning: quote volume
+    source_unit: quote asset
+    nullable: false
+    canonical_field: quote_volume
+    transformation: string_to_decimal
+    normalized_unit: USDT
+    validation_rules: [nonnegative]
+  - source_field: "[8]"
+    semantic_meaning: number of trades
+    source_unit: count
+    nullable: false
+    canonical_field: trade_count
+    transformation: integer
+    normalized_unit: count
+    validation_rules: [nonnegative]
+  - source_field: "[9,10]"
+    semantic_meaning: taker buy base and quote volume
+    source_unit: BTC, USDT
+    nullable: false
+    canonical_field: taker_buy_base_volume/taker_buy_quote_volume
+    transformation: string_to_decimal
+    normalized_unit: BTC, USDT
+    validation_rules: [nonnegative, less_or_equal_total_volume]
+known_limitations:
+  - archive files may be revised by Binance; source checksum and retrieval timestamp are retained
+  - REST pagination endTime inclusivity is not relied upon; loader uses overlap-and-deduplicate
+  - historical availability_time is unknown and must not be reconstructed from retrieval time

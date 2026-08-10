@@ -1,0 +1,74 @@
+{
+  "$defs": {
+    "GapKind": {
+      "enum": [
+        "exchange_gap",
+        "local_collector_gap",
+        "unknown_gap"
+      ],
+      "title": "GapKind",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "gap_id": {
+      "title": "Gap Id",
+      "type": "string"
+    },
+    "source_dataset_id": {
+      "title": "Source Dataset Id",
+      "type": "string"
+    },
+    "instrument_id": {
+      "title": "Instrument Id",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/GapKind"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "ended_at": {
+      "format": "date-time",
+      "title": "Ended At",
+      "type": "string"
+    },
+    "detected_at": {
+      "format": "date-time",
+      "title": "Detected At",
+      "type": "string"
+    },
+    "status": {
+      "title": "Status",
+      "type": "string"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason"
+    }
+  },
+  "required": [
+    "gap_id",
+    "source_dataset_id",
+    "instrument_id",
+    "kind",
+    "started_at",
+    "ended_at",
+    "detected_at",
+    "status"
+  ],
+  "title": "GapRecord",
+  "type": "object"
+}

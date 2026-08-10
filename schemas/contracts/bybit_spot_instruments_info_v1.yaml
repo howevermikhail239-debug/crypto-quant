@@ -1,0 +1,28 @@
+contract_id: bybit.spot.instruments-info.v1
+official_documentation: https://bybit-exchange.github.io/docs/v5/market/instrument
+request: {category: spot, symbol: explicit}
+envelope_fields:
+  - {source_field: retCode, semantic: application_status, unit: code, nullable: false, validation: equals_0}
+  - {source_field: retMsg, semantic: application_message, unit: text, nullable: false}
+  - {source_field: result.category, semantic: native_market_category, unit: enum, nullable: false, validation: equals_spot}
+  - {source_field: result.nextPageCursor, semantic: pagination_cursor, unit: text, nullable: false, limitation: spot_does_not_require_pagination}
+  - {source_field: retExtInfo, semantic: extension_envelope, unit: json, nullable: false}
+  - {source_field: time, semantic: response_generation_time, unit: epoch_ms, nullable: false}
+fields:
+  - {source_field: symbol, canonical_field: native_symbol, unit: symbol, nullable: false, validation: requested_symbol}
+  - {source_field: baseCoin, canonical_field: base_asset, unit: asset_code, nullable: false}
+  - {source_field: quoteCoin, canonical_field: quote_asset, unit: asset_code, nullable: false}
+  - {source_field: status, canonical_field: status, unit: enum, nullable: false}
+  - {source_field: innovation, canonical_field: source_metadata.innovation, unit: flag, nullable: true}
+  - {source_field: marginTrading, canonical_field: source_metadata.margin_trading, unit: enum, nullable: true}
+  - {source_field: priceFilter.tickSize, canonical_field: price_tick, unit: quote_per_base, nullable: false, transformation: Decimal}
+  - {source_field: lotSizeFilter.basePrecision, canonical_field: source_metadata.base_precision, unit: base_precision, nullable: false, limitation: not_quantity_step}
+  - {source_field: lotSizeFilter.quotePrecision, canonical_field: source_metadata.quote_precision, unit: quote_precision, nullable: true}
+  - {source_field: lotSizeFilter.minOrderQty, canonical_field: source_metadata.min_order_qty, unit: base_asset, nullable: true}
+  - {source_field: lotSizeFilter.maxOrderQty, canonical_field: source_metadata.max_order_qty, unit: base_asset, nullable: true}
+  - {source_field: lotSizeFilter.minOrderAmt, canonical_field: source_metadata.min_order_notional, unit: quote_asset, nullable: true}
+  - {source_field: lotSizeFilter.maxOrderAmt, canonical_field: source_metadata.max_order_notional, unit: quote_asset, nullable: true}
+  - {source_field: riskParameters.priceLimitRatioX, canonical_field: source_metadata.price_limit_ratio_x, unit: ratio, nullable: true}
+  - {source_field: riskParameters.priceLimitRatioY, canonical_field: source_metadata.price_limit_ratio_y, unit: ratio, nullable: true}
+nullable_canonical_fields: [quantity_step, launch_time, settle_asset]
+limitations: [basePrecision_is_not_quantity_step, spot_response_does_not_supply_launch_time]

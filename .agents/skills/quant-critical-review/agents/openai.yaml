@@ -1,0 +1,4 @@
+interface:
+  display_name: "Quant Critical Review"
+  short_description: "Gate high-impact quant changes"
+  default_prompt: "Use $quant-critical-review to assess this quantitative change before implementation."

@@ -1,0 +1,86 @@
+project:
+  name: crypto-quant
+  availability_class: best_effort_local
+  timezone: UTC
+scope:
+  exchanges: [binance, bybit]
+  symbols: [BTCUSDT, ETHUSDT]
+  spot: true
+  usdt_linear_perpetual: true
+  excluded_market_types: [usdc, inverse, dated_future, option]
+  datasets:
+    - dataset: ohlcv
+      applies_to: all_eight
+      bootstrap: earliest_reliable_official_availability
+      retention: permanent
+      manual_hold: true
+      availability: best_effort_local
+    - dataset: raw_trade
+      applies_to: all_eight
+      bootstrap: initial_90_days
+      retention: 30_days
+      manual_hold: true
+      availability: best_effort_local
+    - dataset: aggregate_trade
+      applies_to: all_eight
+      bootstrap: source_dependent_explicit_semantics
+      retention: source_dependent
+      manual_hold: true
+      availability: best_effort_local
+    - dataset: funding
+      applies_to: perpetual_only
+      bootstrap: maximum_reliable_official_history
+      retention: permanent
+      manual_hold: true
+      availability: official_history_plus_local_realtime
+    - dataset: open_interest
+      applies_to: perpetual_only
+      bootstrap: maximum_available_official_history_plus_continuous_collection
+      retention: permanent
+      manual_hold: true
+      availability: official_history_plus_local_realtime
+    - dataset: liquidation
+      applies_to: perpetual_only
+      bootstrap: verified_suitable_official_history_plus_controlled_realtime
+      retention: permanent_normalized_raw_source_30_days
+      manual_hold: true
+      availability: official_history_plus_local_realtime
+storage:
+  data_root: C:/crypto_quant_data
+  allow_data_root_inside_repository: false
+  disk_thresholds_gb:
+    warning: 80
+    bootstrap_stop: 50
+    critical_ingestion_stop: 20
+retention:
+  source_faithful_days: 30
+  normalized_individual_trades_days: 30
+  aggregate_1m_days: null
+  aggregate_1s_days: 90
+  aggregate_5s_days: 90
+logging:
+  level: INFO
+  json: true
+  redact_keys: [api_key, api_secret, secret, token, password, authorization, signature]
+versions:
+  schema_version: 1.0.0
+  data_contract_version: 1.0.0
+  storage_layout_version: 1.0.0
+  collector_version: 0.0.0
+  normalization_version: 0.0.0
+  feature_version: 0.0.0
+fee_schedule:
+  status: reserved_not_collected
+  historical_collection_in_phase_1: false
+localization:
+  default_locale: ru-RU
+  fallback_locale: en-US
+  catalog_directory: locales
+future_interfaces:
+  status: reserved_not_implemented
+  signal_contract_version: 0.2.0-draft
+  risk_exit_interface_version: 0.2.0-draft
+  trade_lifecycle_interface_version: 0.2.0-draft
+  polymarket_interface_version: 0.1.0-draft
+  polymarket_phase: 3F
+  polymarket_nonblocking: true

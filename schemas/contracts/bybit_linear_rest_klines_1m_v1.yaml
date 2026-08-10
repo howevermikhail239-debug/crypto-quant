@@ -1,0 +1,19 @@
+contract_id: bybit.linear.ohlcv.1m.v1
+official_documentation: https://bybit-exchange.github.io/docs/v5/market/kline
+request: {category: linear, interval: '1', ordering: reverse_start_time, internal_range: '[start,end)'}
+envelope_fields:
+  - {source_field: retCode, semantic: application_status, unit: code, nullable: false, validation: equals_0}
+  - {source_field: retMsg, semantic: application_message, unit: text, nullable: false}
+  - {source_field: retExtInfo, semantic: extension_envelope, unit: json, nullable: false}
+  - {source_field: time, semantic: response_generation_time, unit: epoch_ms, nullable: false, limitation: not_historical_publication_time}
+  - {source_field: result.category, semantic: native_market_category, unit: enum, nullable: false, validation: equals_linear}
+  - {source_field: result.symbol, semantic: native_symbol, unit: symbol, nullable: false, validation: requested_symbol}
+  - {source_field: result.list, semantic: reverse_ordered_kline_rows, unit: array, nullable: false}
+fields:
+  - {source_field: '[0]', semantic: candle_open_time, source_unit: epoch_ms, timestamp_meaning: inclusive_interval_start, nullable: false, canonical_field: open_time, transformation: explicit_epoch_ms_to_UTC, normalized_unit: 'timestamp[ms,UTC]', validation: minute_aligned_and_in_requested_half_open_range, limitations: []}
+  - {source_field: '[1]', semantic: first_trade_price, source_unit: quote_per_base, timestamp_meaning: null, nullable: false, canonical_field: open, transformation: Decimal128, normalized_unit: quote_per_base, validation: finite_and_positive, limitations: []}
+  - {source_field: '[2]', semantic: highest_trade_price, source_unit: quote_per_base, timestamp_meaning: null, nullable: false, canonical_field: high, transformation: Decimal128, normalized_unit: quote_per_base, validation: 'high>=max(open,close)', limitations: []}
+  - {source_field: '[3]', semantic: lowest_trade_price, source_unit: quote_per_base, timestamp_meaning: null, nullable: false, canonical_field: low, transformation: Decimal128, normalized_unit: quote_per_base, validation: 'low<=min(open,close)', limitations: []}
+  - {source_field: '[4]', semantic: last_trade_price, source_unit: quote_per_base, timestamp_meaning: null, nullable: false, canonical_field: close, transformation: Decimal128, normalized_unit: quote_per_base, validation: finite_and_positive, limitations: [latest_price_until_candle_final]}
+  - {source_field: '[5]', semantic: traded_quantity, source_unit: base_asset, timestamp_meaning: null, nullable: false, canonical_field: base_volume, transformation: Decimal128, normalized_unit: base_asset, validation: finite_nonnegative, limitations: [official_semantic_applies_to_USDT_USDC_contracts]}
+  - {source_field: '[6]', semantic: traded_turnover, source_unit: quote_asset, timestamp_meaning: null, nullable: false, canonical_field: quote_volume, transformation: Decimal128, normalized_unit: quote_asset, validation: finite_nonnegative, limitations: [official_semantic_applies_to_USDT_USDC_contracts]}

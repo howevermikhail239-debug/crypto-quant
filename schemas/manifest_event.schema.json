@@ -1,0 +1,112 @@
+{
+  "$defs": {
+    "ManifestAction": {
+      "enum": [
+        "INGESTED",
+        "VALIDATED",
+        "NORMALIZED",
+        "COMPACTED",
+        "SUPERSEDED",
+        "QUARANTINED",
+        "DELETION_PLANNED",
+        "DELETED",
+        "DELETE_FAILED"
+      ],
+      "title": "ManifestAction",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "action": {
+      "$ref": "#/$defs/ManifestAction"
+    },
+    "object_id": {
+      "title": "Object Id",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "checksum_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Checksum Sha256"
+    },
+    "coverage_start": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Coverage Start"
+    },
+    "coverage_end": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Coverage End"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason"
+    },
+    "schema_version": {
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "collector_version": {
+      "title": "Collector Version",
+      "type": "string"
+    },
+    "normalization_version": {
+      "title": "Normalization Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "event_id",
+    "action",
+    "object_id",
+    "occurred_at",
+    "schema_version",
+    "collector_version",
+    "normalization_version"
+  ],
+  "title": "ManifestEvent",
+  "type": "object"
+}
