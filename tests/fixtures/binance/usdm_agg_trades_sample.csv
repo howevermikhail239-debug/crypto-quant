@@ -1,0 +1,3 @@
+agg_trade_id,price,qty,first_trade_id,last_trade_id,trans_time,is_buyer_maker
+5001,58600.00,0.010,7001,7005,1782864000100,true
+5002,58600.10,0.025,7006,7006,1782864000150,false

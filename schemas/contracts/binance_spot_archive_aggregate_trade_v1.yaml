@@ -1,0 +1,22 @@
+contract_id: binance.spot.archive.aggregate-trade.v1
+source_dataset_id: binance.spot.exchange_aggregate_trade.archive
+exchange: binance
+market_type: spot
+source_kind: daily_archive
+official_documentation_url: https://github.com/binance/binance-public-data/blob/master/README.md
+verified_at: "2026-08-10T00:00:00Z"
+schema_version: 1.0.0
+request_rules:
+  uri_template: "https://data.binance.vision/data/spot/daily/aggTrades/{symbol}/{symbol}-aggTrades-{YYYY-MM-DD}.zip"
+  checksum_sidecar: ".CHECKSUM"
+fields:
+  - {source_field: "[0]", semantic_meaning: exchange aggregate trade identifier, source_unit: identifier, nullable: false, canonical_field: aggregate_trade_id, transformation: string_preserving, normalized_unit: identifier}
+  - {source_field: "[1]", semantic_meaning: aggregate trade price, source_unit: quote_per_base, nullable: false, canonical_field: price, transformation: string_to_decimal, normalized_unit: quote_per_base}
+  - {source_field: "[2]", semantic_meaning: aggregate trade base quantity, source_unit: base_asset, nullable: false, canonical_field: quantity, transformation: string_to_decimal, normalized_unit: base_asset}
+  - {source_field: "[3]", semantic_meaning: first individual trade id in aggregate, source_unit: identifier, nullable: false, canonical_field: first_trade_id, transformation: string_preserving, normalized_unit: identifier}
+  - {source_field: "[4]", semantic_meaning: last individual trade id in aggregate, source_unit: identifier, nullable: false, canonical_field: last_trade_id, transformation: string_preserving, normalized_unit: identifier}
+  - {source_field: "[5]", semantic_meaning: aggregate trade timestamp, source_unit: epoch_ms, nullable: false, canonical_field: event_time, transformation: explicit_ms_to_utc, normalized_unit: UTC}
+  - {source_field: "[6]", semantic_meaning: whether buyer supplied resting liquidity, source_unit: boolean, nullable: false, canonical_field: taker_side, transformation: "true->SELL; false->BUY", normalized_unit: side}
+  - {source_field: "[7]", semantic_meaning: exchange best-match flag, source_unit: boolean, nullable: false, canonical_field: is_best_match, transformation: boolean_preserving, normalized_unit: boolean}
+absent_fields:
+  - {canonical_field: native_trade_id, value: null, reason: "Exchange aggregate trade is a combined execution entity, not a single native individual trade"}
