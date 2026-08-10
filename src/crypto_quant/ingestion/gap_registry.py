@@ -1,7 +1,7 @@
-"""Auditable Gap Registry and Gap Taxonomy (Phase 1C Item 7C).
+"""Auditable Gap Registry and Gap Taxonomy (Phase 1C Item 7C - Revised).
 
 Manages auditable gap records for missing data intervals caused by collector disconnects,
-restarts, or source gaps.
+restarts, or source gaps with explicit boundary proof tracking and strict separation of gap_type vs gap_status.
 """
 
 from __future__ import annotations
@@ -23,8 +23,6 @@ class GapType(StrEnum):
     SOURCE_GAP = "SOURCE_GAP"
     SEQUENCE_GAP = "SEQUENCE_GAP"
     ARCHIVE_GAP = "ARCHIVE_GAP"
-    RECOVERED_GAP = "RECOVERED_GAP"
-    PARTIALLY_RECOVERED_GAP = "PARTIALLY_RECOVERED_GAP"
     UNKNOWN_GAP = "UNKNOWN_GAP"
 
 
@@ -56,6 +54,20 @@ class GapRecord:
     recovery_started_at: datetime | None = None
     recovery_completed_at: datetime | None = None
     records_recovered: int = 0
+    pre_gap_last_trade_id: str | None = None
+    pre_gap_last_trade_time: datetime | None = None
+    post_gap_first_trade_id: str | None = None
+    post_gap_first_trade_time: datetime | None = None
+    recovery_first_trade_id: str | None = None
+    recovery_last_trade_id: str | None = None
+    recovery_first_trade_time: datetime | None = None
+    recovery_last_trade_time: datetime | None = None
+    endpoint_limit: int | None = None
+    pages_requested: int = 0
+    coverage_proven: bool = False
+    coverage_method: str | None = None
+    recovered_ranges: list[dict[str, str]] | None = None
+    remaining_ranges: list[dict[str, str]] | None = None
     evidence: dict[str, Any] | None = None
     notes: str | None = None
 
@@ -70,6 +82,14 @@ class GapRecord:
             res["recovery_started_at"] = self.recovery_started_at.isoformat()
         if self.recovery_completed_at:
             res["recovery_completed_at"] = self.recovery_completed_at.isoformat()
+        if self.pre_gap_last_trade_time:
+            res["pre_gap_last_trade_time"] = self.pre_gap_last_trade_time.isoformat()
+        if self.post_gap_first_trade_time:
+            res["post_gap_first_trade_time"] = self.post_gap_first_trade_time.isoformat()
+        if self.recovery_first_trade_time:
+            res["recovery_first_trade_time"] = self.recovery_first_trade_time.isoformat()
+        if self.recovery_last_trade_time:
+            res["recovery_last_trade_time"] = self.recovery_last_trade_time.isoformat()
         return res
 
     @classmethod
@@ -78,12 +98,24 @@ class GapRecord:
         data_copy["detected_at"] = datetime.fromisoformat(data_copy["detected_at"])
         data_copy["gap_start"] = datetime.fromisoformat(data_copy["gap_start"])
         data_copy["gap_end"] = datetime.fromisoformat(data_copy["gap_end"])
-        data_copy["gap_type"] = GapType(data_copy["gap_type"])
+
+        # Backward compatibility for earlier gap_type values if any
+        gt_val = data_copy["gap_type"]
+        if gt_val in ("RECOVERED_GAP", "PARTIALLY_RECOVERED_GAP"):
+            gt_val = "LOCAL_COLLECTOR_GAP"
+        data_copy["gap_type"] = GapType(gt_val)
         data_copy["status"] = GapStatus(data_copy["status"])
-        if data_copy.get("recovery_started_at"):
-            data_copy["recovery_started_at"] = datetime.fromisoformat(data_copy["recovery_started_at"])
-        if data_copy.get("recovery_completed_at"):
-            data_copy["recovery_completed_at"] = datetime.fromisoformat(data_copy["recovery_completed_at"])
+
+        for time_field in (
+            "recovery_started_at",
+            "recovery_completed_at",
+            "pre_gap_last_trade_time",
+            "post_gap_first_trade_time",
+            "recovery_first_trade_time",
+            "recovery_last_trade_time",
+        ):
+            if data_copy.get(time_field):
+                data_copy[time_field] = datetime.fromisoformat(data_copy[time_field])
         return cls(**data_copy)
 
 
@@ -109,6 +141,10 @@ class GapRegistry:
         gap_type: GapType = GapType.LOCAL_COLLECTOR_GAP,
         session_before: str | None = None,
         session_after: str | None = None,
+        pre_gap_last_trade_id: str | None = None,
+        pre_gap_last_trade_time: datetime | None = None,
+        post_gap_first_trade_id: str | None = None,
+        post_gap_first_trade_time: datetime | None = None,
         evidence: dict[str, Any] | None = None,
         notes: str | None = None,
     ) -> GapRecord:
@@ -128,6 +164,10 @@ class GapRegistry:
             status=GapStatus.OPEN,
             session_before=session_before,
             session_after=session_after,
+            pre_gap_last_trade_id=pre_gap_last_trade_id,
+            pre_gap_last_trade_time=pre_gap_last_trade_time,
+            post_gap_first_trade_id=post_gap_first_trade_id,
+            post_gap_first_trade_time=post_gap_first_trade_time,
             evidence=evidence,
             notes=notes,
         )
@@ -142,7 +182,7 @@ class GapRegistry:
             os.fsync(f.fileno())
 
     def update_gap(self, record: GapRecord) -> None:
-        """Appends updated state of an existing gap to maintaining audit history."""
+        """Appends updated state of an existing gap to maintain audit history."""
         self._append_record(record)
 
     def list_gaps(self, status_filter: GapStatus | None = None) -> list[GapRecord]:

@@ -1,15 +1,16 @@
-"""7C Live Reconnect and Gap Recovery Smoke Test.
+"""7C Live Reconnect and Gap Recovery Smoke Test with Boundary Proof Audit.
 
 Executes controlled live reconnect & recovery flow:
 1. Start live WebSocket stream for Binance Spot BTCUSDT
 2. Receive envelopes for 3 seconds
 3. Simulate client disconnect
-4. Audit candidate gap record created in GapRegistry
+4. Audit candidate gap record created in GapRegistry with pre_gap_last_trade_id
 5. Calculate backoff delay with jitter
 6. Start new session (verifying distinct session_id lineage)
-7. Perform REST gap recovery
-8. Resume live stream on new session
-9. Print complete 7C metrics report
+7. Set post_gap_first_trade_id on candidate gap
+8. Perform REST gap recovery and validate boundary proof
+9. Resume live stream on new session
+10. Print complete 7C metrics report with boundary proof details
 """
 
 from __future__ import annotations
@@ -50,11 +51,14 @@ async def run_7c_live_reconnect_smoke():
     sess1.transition_to(RealtimeSessionState.ACTIVE)
     sess1.start_consumer()
 
+    last_trade_id_sess1 = None
     start_t = time.monotonic()
     while time.monotonic() - start_t < 3.0:
         try:
             msg = await asyncio.wait_for(ws1.recv(), timeout=1.0)
             payload = json.loads(msg)
+            if payload.get("t"):
+                last_trade_id_sess1 = str(payload["t"])
             env = create_raw_ws_envelope(
                 exchange="binance",
                 market_type="spot",
@@ -72,15 +76,13 @@ async def run_7c_live_reconnect_smoke():
     # 2. Simulate Disconnect
     await ws1.close()
     gap_record, delay_sec = await supervisor.handle_disconnect("controlled client disconnect test")
-    print(f"Disconnect Handled. Gap ID: {gap_record.gap_id}, Candidate Window: {gap_record.gap_start} to {gap_record.gap_end}")
+    gap_record.pre_gap_last_trade_id = last_trade_id_sess1
+    supervisor.registry.update_gap(gap_record)
+
+    print(f"Disconnect Handled. Gap ID: {gap_record.gap_id}, Pre-Gap Last Trade ID: {last_trade_id_sess1}")
     print(f"Calculated Reconnect Delay (Backoff + Jitter): {delay_sec:.4f}s")
 
-    # 3. Perform REST Recovery on Candidate Gap
-    print("Triggering REST recovery for candidate gap...")
-    recovered_gap = await supervisor.trigger_gap_recovery(gap_record)
-    print(f"Recovery Completed. Status: {recovered_gap.status.value}, Records Recovered: {recovered_gap.records_recovered}")
-
-    # 4. Reconnect Session 2
+    # 3. Reconnect Session 2
     sess2 = supervisor.create_new_session()
     supervisor.active_session = sess2
     sess2.transition_to(RealtimeSessionState.CONNECTING)
@@ -89,14 +91,14 @@ async def run_7c_live_reconnect_smoke():
     sess2.transition_to(RealtimeSessionState.ACTIVE)
     sess2.start_consumer()
 
-    recovered_gap.session_after = sess2.session_info.session_id
-    supervisor.registry.update_gap(recovered_gap)
-
+    first_trade_id_sess2 = None
     start_t2 = time.monotonic()
     while time.monotonic() - start_t2 < 3.0:
         try:
             msg = await asyncio.wait_for(ws2.recv(), timeout=1.0)
             payload = json.loads(msg)
+            if first_trade_id_sess2 is None and payload.get("t"):
+                first_trade_id_sess2 = str(payload["t"])
             env = create_raw_ws_envelope(
                 exchange="binance",
                 market_type="spot",
@@ -111,6 +113,15 @@ async def run_7c_live_reconnect_smoke():
         except TimeoutError:
             continue
 
+    gap_record.post_gap_first_trade_id = first_trade_id_sess2
+    gap_record.session_after = sess2.session_info.session_id
+    supervisor.registry.update_gap(gap_record)
+
+    # 4. Perform REST Recovery on Candidate Gap with Boundary Proof
+    print("Triggering REST recovery with boundary proof validation...")
+    recovered_gap = await supervisor.trigger_gap_recovery(gap_record)
+    print(f"Recovery Completed. Status: {recovered_gap.status.value}, Coverage Proven: {recovered_gap.coverage_proven}, Records: {recovered_gap.records_recovered}")
+
     await ws2.close()
     await sess2.close_session(reason="smoke test completed")
 
@@ -122,10 +133,13 @@ async def run_7c_live_reconnect_smoke():
         "reconnected_session_id": sess2.session_info.session_id,
         "session_lineage_distinct": sess1.session_info.session_id != sess2.session_info.session_id,
         "candidate_gap_id": recovered_gap.gap_id,
-        "candidate_gap_duration_sec": (recovered_gap.gap_end - recovered_gap.gap_start).total_seconds(),
-        "reconnect_attempts": supervisor.reconnect_count,
-        "reconnect_delay_calculated": delay_sec,
-        "recovery_source": recovered_gap.recovery_source,
+        "pre_gap_last_trade_id": last_trade_id_sess1,
+        "post_gap_first_trade_id": first_trade_id_sess2,
+        "recovery_first_trade_id": recovered_gap.recovery_first_trade_id,
+        "recovery_last_trade_id": recovered_gap.recovery_last_trade_id,
+        "pages_requested": recovered_gap.pages_requested,
+        "coverage_proven": recovered_gap.coverage_proven,
+        "coverage_method": recovered_gap.coverage_method,
         "records_recovered": recovered_gap.records_recovered,
         "gap_final_status": recovered_gap.status.value,
         "sess1_envelopes_written": sess1.meta.envelopes_written,
