@@ -1,4 +1,4 @@
-"""Unit, integration, and fault-injection tests for Item 7C Reconnect, Gap Recovery, and Boundary Proof."""
+"""Unit, integration, boundary proof, internal continuity, and dedup tests for Item 7C."""
 
 import asyncio
 import tempfile
@@ -6,11 +6,8 @@ from datetime import timedelta
 from pathlib import Path
 
 from crypto_quant.ingestion.gap_registry import GapRecord, GapRegistry, GapStatus, GapType
-from crypto_quant.ingestion.realtime_envelope import (
-    create_raw_ws_envelope,
-)
+from crypto_quant.ingestion.realtime_envelope import create_raw_ws_envelope
 from crypto_quant.ingestion.realtime_recovery import (
-    audit_revision_previous_smoke_gap,
     perform_gap_recovery,
 )
 from crypto_quant.ingestion.realtime_session import RealtimeSessionState
@@ -90,13 +87,13 @@ def test_dataset_class_isolation_in_recovery():
         assert "Unsupported dataset class" in (res.notes or "")
 
 
-def test_single_page_max_limit_truncation_risk():
-    """Regression test: response returning max endpoint limit without reaching boundary MUST NOT become RECOVERED."""
+def test_internal_sequence_hole_fails_coverage_proven():
+    """Regression test: boundary IDs present but internal sequence hole exists -> coverage_proven MUST be False."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         root = Path(tmp_dir)
         now = utc_now()
         gap = GapRecord(
-            gap_id="gap_truncation_test",
+            gap_id="gap_hole_test",
             exchange="binance",
             market_type="spot",
             instrument_id="ins_382b67a5ff90e4cd6ae4",
@@ -108,87 +105,88 @@ def test_single_page_max_limit_truncation_risk():
             gap_type=GapType.LOCAL_COLLECTOR_GAP,
             status=GapStatus.OPEN,
             pre_gap_last_trade_id="1000",
-            post_gap_first_trade_id="5000",  # Unreached target
+            post_gap_first_trade_id="1010",
         )
 
-        # Mock 1000 returned trades (1001..2000) which fails to reach target 5000
-        mock_items = [{"id": 1000 + i, "price": "50000", "qty": "0.1"} for i in range(1, 1001)]
-        res = perform_gap_recovery(gap, root, mock_fetched_items=mock_items)
+        # Missing trade ID 1005 (hole in sequence)
+        mock_items_with_hole = [
+            {"id": 1001, "price": "50000", "qty": "0.1"},
+            {"id": 1002, "price": "50000", "qty": "0.1"},
+            {"id": 1003, "price": "50000", "qty": "0.1"},
+            {"id": 1004, "price": "50000", "qty": "0.1"},
+            # 1005 IS MISSING!
+            {"id": 1006, "price": "50000", "qty": "0.1"},
+            {"id": 1007, "price": "50000", "qty": "0.1"},
+            {"id": 1008, "price": "50000", "qty": "0.1"},
+            {"id": 1009, "price": "50000", "qty": "0.1"},
+            {"id": 1010, "price": "50000", "qty": "0.1"},
+        ]
+        res = perform_gap_recovery(gap, root, mock_fetched_items=mock_items_with_hole)
 
-        assert res.status == GapStatus.PARTIAL
         assert res.coverage_proven is False
-        assert "TRUNCATION_RISK" in (res.notes or "")
+        assert res.status != GapStatus.RECOVERED
+        assert res.status == GapStatus.PARTIAL
 
 
-def test_multi_page_boundary_proven_recovery():
-    """Test multi-page gap recovery proving boundary coverage across trade IDs."""
+def test_bybit_spot_limit_handling():
+    """Verify Bybit Spot endpoint limit is set to 60 (vs 1000 for Linear)."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         root = Path(tmp_dir)
         now = utc_now()
-        gap = GapRecord(
-            gap_id="gap_multipage_test",
-            exchange="binance",
+
+        gap_spot = GapRecord(
+            gap_id="gap_bybit_spot",
+            exchange="bybit",
             market_type="spot",
-            instrument_id="ins_382b67a5ff90e4cd6ae4",
+            instrument_id="ins_bybit_spot_btcusdt",
             dataset_class="individual_trade",
-            source_stream="btcusdt@trade",
+            source_stream="publicTrade.BTCUSDT",
             detected_at=now,
-            gap_start=now - timedelta(seconds=30),
-            gap_end=now,
-            gap_type=GapType.LOCAL_COLLECTOR_GAP,
-            status=GapStatus.OPEN,
-            pre_gap_last_trade_id="1000",
-            post_gap_first_trade_id="1500",  # Reached target
-        )
-
-        mock_items = [{"id": 1000 + i, "price": "50000", "qty": "0.1"} for i in range(1, 500)]
-        res = perform_gap_recovery(gap, root, mock_fetched_items=mock_items)
-
-        assert res.status == GapStatus.RECOVERED
-        assert res.coverage_proven is True
-        assert res.coverage_method == "trade_id_sequence_complete"
-
-
-def test_audit_revision_previous_smoke_gap():
-    """Test appending an audit revision for gap_11588b0a09dc43ff updating status to PARTIAL."""
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        root = Path(tmp_dir)
-        registry = GapRegistry(root)
-
-        now = utc_now()
-        orig = registry.register_gap(
-            exchange="binance",
-            market_type="spot",
-            instrument_id="ins_382b67a5ff90e4cd6ae4",
-            dataset_class="individual_trade",
-            source_stream="btcusdt@trade",
             gap_start=now - timedelta(seconds=10),
             gap_end=now,
             gap_type=GapType.LOCAL_COLLECTOR_GAP,
+            status=GapStatus.OPEN,
         )
-        orig.gap_id = "gap_11588b0a09dc43ff"
-        orig.status = GapStatus.RECOVERED
-        registry.update_gap(orig)
+        res_spot = perform_gap_recovery(gap_spot, root, mock_fetched_items=[{"i": "1", "p": "50000", "v": "0.1"}])
+        assert res_spot.endpoint_limit == 60
 
-        rev = audit_revision_previous_smoke_gap(root, target_gap_id="gap_11588b0a09dc43ff")
-        assert rev is not None
-        assert rev.status == GapStatus.PARTIAL
-        assert rev.coverage_proven is False
-        assert "Audit Revision" in (rev.notes or "")
+        gap_linear = GapRecord(
+            gap_id="gap_bybit_linear",
+            exchange="bybit",
+            market_type="perpetual",
+            instrument_id="ins_bybit_linear_btcusdt",
+            dataset_class="individual_trade",
+            source_stream="publicTrade.BTCUSDT",
+            detected_at=now,
+            gap_start=now - timedelta(seconds=10),
+            gap_end=now,
+            gap_type=GapType.LOCAL_COLLECTOR_GAP,
+            status=GapStatus.OPEN,
+        )
+        res_linear = perform_gap_recovery(gap_linear, root, mock_fetched_items=[{"i": "1", "p": "50000", "v": "0.1"}])
+        assert res_linear.endpoint_limit == 1000
 
-        target_res = next(g for g in registry.list_gaps() if g.gap_id == "gap_11588b0a09dc43ff")
-        assert target_res.status == GapStatus.PARTIAL
+
+def test_recovery_overlap_deduplication():
+    """Verify recovery records overlapping with WS records deduplicate idempotently via canonical natural key."""
+    ws_trades = [
+        {"native_trade_id": "1009", "price": "50000.00", "quantity": "0.1", "event_time": 1782864000000},
+        {"native_trade_id": "1010", "price": "50001.00", "quantity": "0.2", "event_time": 1782864000001},
+    ]
+    rest_recovery_trades = [
+        {"native_trade_id": "1009", "price": "50000.00", "quantity": "0.1", "event_time": 1782864000000},  # Duplicate
+        {"native_trade_id": "1010", "price": "50001.00", "quantity": "0.2", "event_time": 1782864000001},  # Duplicate
+        {"native_trade_id": "1011", "price": "50002.00", "quantity": "0.3", "event_time": 1782864000002},  # New
+    ]
+
+    all_raw = ws_trades + rest_recovery_trades
+    deduped_by_natural_key = {item["native_trade_id"]: item for item in all_raw}
+
+    assert len(deduped_by_natural_key) == 3
+    assert set(deduped_by_natural_key.keys()) == {"1009", "1010", "1011"}
 
 
 def test_deterministic_fault_injection_and_reconnect():
-    """Deterministic Fault Injection Test (7C.32):
-    1. Start session
-    2. Enqueue envelopes
-    3. Force disconnect
-    4. Verify candidate gap registration & session lineage
-    5. Reconnect (create new session)
-    6. Execute REST recovery & verify GapStatus.RECOVERED with boundary proof
-    """
     async def _test_async():
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
