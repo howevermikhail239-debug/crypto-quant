@@ -1,0 +1,19 @@
+contract_id: bybit.spot.ws.individual-trade.v1
+source_dataset_id: bybit.spot.individual_trade.ws
+exchange: bybit
+market_type: spot
+source_kind: websocket_stream
+official_documentation_url: https://bybit-exchange.github.io/docs/v5/websocket/public/trade
+verified_at: "2026-08-10T00:00:00Z"
+schema_version: 1.0.0
+request_rules:
+  topic_template: "publicTrade.{symbol}"
+fields:
+  - {source_field: i, semantic_meaning: exchange individual trade execution identifier, source_unit: identifier, nullable: false, canonical_field: native_trade_id, transformation: string_preserving, normalized_unit: identifier}
+  - {source_field: s, semantic_meaning: native symbol name, source_unit: string, nullable: false, canonical_field: native_symbol, transformation: string_preserving, normalized_unit: symbol}
+  - {source_field: p, semantic_meaning: execution price, source_unit: quote_per_base, nullable: false, canonical_field: price, transformation: string_to_decimal, normalized_unit: quote_per_base}
+  - {source_field: v, semantic_meaning: executed base quantity, source_unit: base_asset, nullable: false, canonical_field: quantity, transformation: string_to_decimal, normalized_unit: base_asset}
+  - {source_field: S, semantic_meaning: aggressor/taker side, source_unit: string, nullable: false, canonical_field: taker_side, transformation: "Buy->BUY; Sell->SELL; case-insensitive", normalized_unit: side}
+  - {source_field: T, semantic_meaning: trade execution timestamp, source_unit: epoch_ms, nullable: false, canonical_field: event_time, transformation: explicit_ms_to_utc, normalized_unit: UTC}
+  - {source_field: BT, semantic_meaning: block trade indicator, source_unit: boolean, nullable: true, canonical_field: is_block_trade, transformation: boolean_preserving, normalized_unit: boolean}
+  - {source_field: seq, semantic_meaning: websocket message sequence number (NON-UNIQUE per trade), source_unit: integer, nullable: true, canonical_field: source_ordinal, transformation: integer_preserving, normalized_unit: integer}

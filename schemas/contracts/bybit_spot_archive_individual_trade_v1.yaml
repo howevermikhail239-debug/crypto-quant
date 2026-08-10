@@ -1,0 +1,22 @@
+contract_id: bybit.spot.archive.individual-trade.v1
+source_dataset_id: bybit.spot.individual_trade.archive
+exchange: bybit
+market_type: spot
+source_kind: daily_archive
+official_documentation_url: https://www.bybit.com/en/derivative-activity/history-data
+verified_at: "2026-08-10T00:00:00Z"
+schema_version: 1.0.0
+request_rules:
+  uri_template: "https://public.bybit.com/spot/{symbol}/{symbol}_{YYYY-MM-DD}.csv.gz"
+  checksum_sidecar: null
+  timestamp_unit_policy: "epoch milliseconds in observed Bybit Spot trade archive CSV objects"
+  exact_header: [id, timestamp, price, volume, side, rpi]
+fields:
+  - {source_field: id, semantic_meaning: exchange individual trade identifier, source_unit: identifier, nullable: false, canonical_field: native_trade_id, transformation: string_preserving, normalized_unit: identifier}
+  - {source_field: timestamp, semantic_meaning: trade execution timestamp, source_unit: epoch_ms, nullable: false, canonical_field: event_time, transformation: explicit_ms_to_utc, normalized_unit: UTC}
+  - {source_field: price, semantic_meaning: execution price, source_unit: quote_per_base, nullable: false, canonical_field: price, transformation: string_to_decimal, normalized_unit: quote_per_base}
+  - {source_field: volume, semantic_meaning: executed base-asset quantity, source_unit: base_asset, nullable: false, canonical_field: quantity, transformation: string_to_decimal, normalized_unit: base_asset}
+  - {source_field: side, semantic_meaning: trade aggressor/taker side, source_unit: string, nullable: false, canonical_field: taker_side, transformation: "buy->BUY; sell->SELL; case-insensitive fixture-gated", normalized_unit: side}
+  - {source_field: rpi, semantic_meaning: retail price improvement flag, source_unit: string, nullable: true, canonical_field: is_rpi_trade, transformation: "1->true; 0->false", normalized_unit: boolean}
+absent_fields:
+  - {canonical_field: is_buyer_maker, value: null, reason: "Bybit provides direct taker side (buy/sell) instead of is_buyer_maker boolean"}

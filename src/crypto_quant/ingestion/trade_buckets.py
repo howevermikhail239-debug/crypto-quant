@@ -27,6 +27,7 @@ class TradeSourceDescriptor:
     market_type: str
     contract_type: str
     manifest_name: str
+    exchange: str = "binance"
 
 
 SPOT_SOURCE = TradeSourceDescriptor(
@@ -34,12 +35,28 @@ SPOT_SOURCE = TradeSourceDescriptor(
     market_type="spot",
     contract_type="spot",
     manifest_name="binance_spot_individual_trade.jsonl",
+    exchange="binance",
 )
 USDM_SOURCE = TradeSourceDescriptor(
     dataset_id="binance.usdm.individual_trade.archive",
     market_type="perpetual",
     contract_type="linear_perpetual",
     manifest_name="binance_usdm_individual_trade.jsonl",
+    exchange="binance",
+)
+BYBIT_SPOT_SOURCE = TradeSourceDescriptor(
+    dataset_id="bybit.spot.individual_trade.archive",
+    market_type="spot",
+    contract_type="spot",
+    manifest_name="bybit_spot_individual_trade.jsonl",
+    exchange="bybit",
+)
+BYBIT_LINEAR_SOURCE = TradeSourceDescriptor(
+    dataset_id="bybit.linear.individual_trade.archive",
+    market_type="perpetual",
+    contract_type="linear_perpetual",
+    manifest_name="bybit_linear_individual_trade.jsonl",
+    exchange="bybit",
 )
 SCHEMA = pa.schema(
     [
@@ -97,17 +114,20 @@ def _source_event(
 ) -> dict[str, Any]:
     manifest = root / "control" / "manifests" / descriptor.manifest_name
     matches = []
+    target_obj = str(source.relative_to(root)).replace("\\", "/")
     for line in manifest.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
         event = json.loads(line)
-        if event.get("object_id") == str(source.relative_to(root)):
+        if event.get("object_id", "").replace("\\", "/") == target_obj:
             matches.append(event)
-    if len(matches) != 1:
-        raise ValueError("source must have exactly one manifest event")
-    event = matches[0]
+    if not matches:
+        raise ValueError("source must have at least one manifest event")
+    event = matches[-1]
     expected = {
         "source_dataset_id": descriptor.dataset_id,
         "instrument_id": instrument_id,
-        "exchange": "binance",
+        "exchange": descriptor.exchange,
         "market_type": descriptor.market_type,
         "contract_type": descriptor.contract_type,
     }
@@ -189,8 +209,10 @@ def build_buckets(
     # Validate immutable provenance before trusting/parsing the source bytes.
     inferred_instrument = (
         instrument_id
-        or next(part for part in source.parts if part.startswith("instrument_id=")).split("=", 1)[1]
+        or next((part.split("=", 1)[1] for part in source.parts if part.startswith("instrument_id=")), None)
     )
+    if not inferred_instrument:
+        inferred_instrument = pq.ParquetFile(source).read_row_group(0, columns=["instrument_id"])["instrument_id"][0].as_py()
     inferred_date = trading_date or date.fromisoformat(
         next(part for part in source.parts if part.startswith("date=")).split("=", 1)[1]
     )
@@ -306,7 +328,7 @@ def build_buckets(
         / "derived"
         / "trade_bucket"
         / "v1"
-        / "exchange=binance"
+        / f"exchange={descriptor.exchange}"
         / f"market_type={descriptor.market_type}"
         / f"instrument_id={instrument_id}"
         / f"date={trading_date}"

@@ -1,0 +1,19 @@
+contract_id: bybit.linear.rest.individual-trade.v1
+source_dataset_id: bybit.linear.individual_trade.rest
+exchange: bybit
+market_type: perpetual
+contract_type: linear_perpetual
+source_kind: rest_api
+official_documentation_url: https://bybit-exchange.github.io/docs/v5/market/recent-trade
+verified_at: "2026-08-10T00:00:00Z"
+schema_version: 1.0.0
+request_rules:
+  endpoint_template: "https://api.bybit.com/v5/market/trades?category=linear&symbol={symbol}&limit={limit}"
+fields:
+  - {source_field: execId, semantic_meaning: exchange individual trade execution identifier, source_unit: identifier, nullable: false, canonical_field: native_trade_id, transformation: string_preserving, normalized_unit: identifier}
+  - {source_field: symbol, semantic_meaning: native symbol name, source_unit: string, nullable: false, canonical_field: native_symbol, transformation: string_preserving, normalized_unit: symbol}
+  - {source_field: price, semantic_meaning: execution price, source_unit: quote_per_base, nullable: false, canonical_field: price, transformation: string_to_decimal, normalized_unit: quote_per_base}
+  - {source_field: size, semantic_meaning: executed base quantity, source_unit: base_asset, nullable: false, canonical_field: quantity, transformation: string_to_decimal, normalized_unit: base_asset}
+  - {source_field: side, semantic_meaning: aggressor/taker side, source_unit: string, nullable: false, canonical_field: taker_side, transformation: "Buy->BUY; Sell->SELL; case-insensitive", normalized_unit: side}
+  - {source_field: time, semantic_meaning: trade execution timestamp, source_unit: epoch_ms, nullable: false, canonical_field: event_time, transformation: explicit_ms_to_utc, normalized_unit: UTC}
+  - {source_field: isBlockTrade, semantic_meaning: block trade indicator, source_unit: boolean, nullable: true, canonical_field: is_block_trade, transformation: boolean_preserving, normalized_unit: boolean}
