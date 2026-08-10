@@ -1,0 +1,16 @@
+{
+  "topic": "publicTrade.BTCUSDT",
+  "type": "snapshot",
+  "ts": 1782864000580,
+  "data": [
+    {
+      "T": 1782864000554,
+      "s": "BTCUSDT",
+      "S": "UNKNOWN_SIDE_VALUE",
+      "v": "invalid_qty_string",
+      "p": "58631.50",
+      "i": "2100000000000000099",
+      "seq": 1000201
+    }
+  ]
+}
