@@ -153,7 +153,7 @@ def reconcile_trade_datasets(
     left_source_name: str = "archive_or_rest",
     right_source_name: str = "websocket",
     right_dataset_class: str | None = None,
-    timestamp_tolerance_ms: int = 1000,
+    timestamp_tolerance_ms: int = 0,
 ) -> ReconciliationMetrics:
     """Performs statistical reconciliation across sources with strict dataset class isolation.
 
@@ -261,7 +261,12 @@ def reconcile_trade_datasets(
 
     total_ref = len(archive_map) or len(all_keys) or 1
     match_rate = round((exact_matched / total_ref) * 100.0, 2)
-    coverage_proven = (ws_missing == 0 and field_mismatch == 0 and side_mismatch == 0)
+    coverage_proven = (
+        ws_missing == 0
+        and field_mismatch == 0
+        and side_mismatch == 0
+        and timestamp_mismatch == 0
+    )
 
     status = "MATCH" if coverage_proven else "DISCREPANCY_DETECTED"
 

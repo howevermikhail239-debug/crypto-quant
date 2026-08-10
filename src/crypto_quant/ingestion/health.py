@@ -1,9 +1,20 @@
-"""Collector Operational Health and Data Quality Guards (Phase 1C Item 7E Audit).
+"""Collector Operational Health and Data Quality Guards (Phase 1C Item 7E).
 
-Provides decoupled status tracking separating Availability vs Completeness and disk thresholds:
-- Availability Status: HEALTHY, DEGRADED, RECONNECTING, FAILED
-- Completeness Status: COMPLETE, RECOVERED, PARTIAL, GAPPED, UNKNOWN
-- Disk Status: OK, WARNING, CRITICAL_STOP
+Provides decoupled status tracking separating Availability vs Completeness
+with three-tier disk thresholds matching config/default.yaml:
+  warning: 80 GB
+  bootstrap_stop: 50 GB
+  critical_ingestion_stop: 20 GB
+
+Availability: HEALTHY, DEGRADED, RECONNECTING, FAILED
+Completeness: COMPLETE, RECOVERED, PARTIAL, GAPPED, UNKNOWN
+Disk: OK, WARNING, BOOTSTRAP_STOP, CRITICAL_INGESTION_STOP
+
+Liveness evaluation distinguishes transport-level liveness (socket state,
+heartbeat/ping-pong) from market-data freshness (last trade age).
+Transport liveness failures transition to DEGRADED/FAILED regardless of
+trade activity.  Market data staleness alone is NOT treated as connection
+failure — some instruments legitimately have long inter-trade gaps.
 """
 
 from __future__ import annotations
@@ -36,7 +47,8 @@ class CompletenessStatus(StrEnum):
 class DiskThresholdStatus(StrEnum):
     OK = "OK"
     WARNING = "WARNING"
-    CRITICAL_STOP = "CRITICAL_STOP"
+    BOOTSTRAP_STOP = "BOOTSTRAP_STOP"
+    CRITICAL_INGESTION_STOP = "CRITICAL_INGESTION_STOP"
 
 
 @dataclass
@@ -53,7 +65,7 @@ class CollectorHealthState:
     unrecoverable_gap_count: int
     last_updated_at: datetime
 
-    def to_dict(self) -> dict[str, str | int]:
+    def to_dict(self) -> dict[str, str | int | float]:
         return {
             "exchange": self.exchange,
             "market_type": self.market_type,
@@ -77,19 +89,26 @@ def compute_collector_health(
     symbol: str,
     root: Path,
     current_availability: AvailabilityStatus = AvailabilityStatus.HEALTHY,
-    last_message_age_sec: float | None = None,
-    liveness_threshold_sec: float = 60.0,
-    warning_disk_gb: float = 100.0,
-    critical_disk_gb: float = 50.0,
+    # Transport-level liveness (socket/heartbeat, not market data freshness)
+    transport_healthy: bool = True,
+    # Configurable disk thresholds (matching config/default.yaml)
+    warning_disk_gb: float = 80.0,
+    bootstrap_stop_disk_gb: float = 50.0,
+    critical_ingestion_stop_disk_gb: float = 20.0,
 ) -> CollectorHealthState:
-    """Evaluates operational availability, completeness, stale feed liveness, and disk thresholds."""
-    # Stale Feed Liveness Check
-    if (
-        current_availability == AvailabilityStatus.HEALTHY
-        and last_message_age_sec is not None
-        and last_message_age_sec > liveness_threshold_sec
-    ):
+    """Evaluates operational availability, completeness, and disk thresholds.
+
+    Liveness semantics:
+    - transport_healthy = False transitions HEALTHY → DEGRADED.
+      This flag should reflect socket state / heartbeat / ping-pong,
+      NOT absence of trade messages.
+    - Absence of trades is a market-data freshness concern and does
+      not by itself indicate a dead connection.
+    """
+    # Transport liveness check
+    if current_availability == AvailabilityStatus.HEALTHY and not transport_healthy:
         current_availability = AvailabilityStatus.DEGRADED
+
     registry = GapRegistry(root)
     all_gaps = registry.list_gaps()
 
@@ -110,12 +129,14 @@ def compute_collector_health(
     else:
         completeness = CompletenessStatus.COMPLETE
 
-    # Disk Space Check
-    total, used, free = shutil.disk_usage(root)
+    # Disk space – three-tier thresholds per config/default.yaml
+    _total, _used, free = shutil.disk_usage(root)
     free_gb = free / (1024**3)
 
-    if free_gb < critical_disk_gb:
-        disk_status = DiskThresholdStatus.CRITICAL_STOP
+    if free_gb < critical_ingestion_stop_disk_gb:
+        disk_status = DiskThresholdStatus.CRITICAL_INGESTION_STOP
+    elif free_gb < bootstrap_stop_disk_gb:
+        disk_status = DiskThresholdStatus.BOOTSTRAP_STOP
     elif free_gb < warning_disk_gb:
         disk_status = DiskThresholdStatus.WARNING
     else:

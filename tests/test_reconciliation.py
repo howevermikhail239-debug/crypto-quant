@@ -112,3 +112,73 @@ def test_exact_reconciliation_match_and_manifest():
         records = registry.list_reconciliations()
         assert len(records) == 1
         assert records[0].match_rate_pct == 100.0
+
+
+def test_timestamp_conflict_at_zero_tolerance():
+    """Same trade ID but 900ms timestamp difference → TIMESTAMP_CONFLICT at default tolerance=0."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        root = Path(tmp_dir)
+        archive = [{"native_trade_id": "201", "price": "50000", "quantity": "1", "event_time": 1782864000000}]
+        ws = [{"native_trade_id": "201", "price": "50000", "quantity": "1", "event_time": 1782864000900}]
+
+        metrics = reconcile_trade_datasets(
+            exchange="binance",
+            market_type="spot",
+            symbol="BTCUSDT",
+            dataset_class="individual_trade",
+            archive_trades=archive,
+            ws_trades=ws,
+            rest_trades=[],
+            root=root,
+            timestamp_tolerance_ms=0,  # explicit: exact match required
+        )
+
+        assert metrics.timestamp_mismatch_count == 1
+        assert metrics.coverage_proven is False
+        cats = [d["category"] for d in metrics.discrepancy_details]
+        assert ReconciliationCategory.TIMESTAMP_CONFLICT.value in cats
+
+
+def test_timestamp_match_within_explicit_tolerance():
+    """Same trade ID, 500ms diff, tolerance=1000ms → MATCH (no conflict)."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        root = Path(tmp_dir)
+        archive = [{"native_trade_id": "301", "price": "50000", "quantity": "1", "event_time": 1782864000000}]
+        ws = [{"native_trade_id": "301", "price": "50000", "quantity": "1", "event_time": 1782864000500}]
+
+        metrics = reconcile_trade_datasets(
+            exchange="binance",
+            market_type="spot",
+            symbol="BTCUSDT",
+            dataset_class="individual_trade",
+            archive_trades=archive,
+            ws_trades=ws,
+            rest_trades=[],
+            root=root,
+            timestamp_tolerance_ms=1000,  # explicitly justified tolerance
+        )
+
+        assert metrics.timestamp_mismatch_count == 0
+        assert metrics.exact_matched_count == 1
+        assert metrics.coverage_proven is True
+
+
+def test_dataset_class_isolation_reverse_direction():
+    """exchange_aggregate_trade vs individual_trade → rejected (both directions)."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        root = Path(tmp_dir)
+        trades = [{"aggregate_trade_id": "5001", "price": "50000", "quantity": "1"}]
+
+        with pytest.raises(TypeError, match="DATASET_CLASS_MISMATCH"):
+            reconcile_trade_datasets(
+                exchange="binance",
+                market_type="spot",
+                symbol="BTCUSDT",
+                dataset_class="exchange_aggregate_trade",
+                right_dataset_class="individual_trade",
+                archive_trades=trades,
+                ws_trades=trades,
+                rest_trades=[],
+                root=root,
+            )
+
