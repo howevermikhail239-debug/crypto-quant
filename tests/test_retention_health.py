@@ -107,6 +107,7 @@ def test_retention_boundary_exactly_30d_kept():
 def test_retention_semantic_coverage_older_than_fresh_mtime():
     """Old manifest coverage (40d ago) + fresh filesystem mtime (1h ago) -> ELIGIBLE & DELETED."""
     import json
+
     from crypto_quant.ingestion.retention import DeletionLedger
 
     with tempfile.TemporaryDirectory() as tmp_dir:
