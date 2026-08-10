@@ -265,14 +265,15 @@ def normalize_ws_envelope_to_individual_trades(
             price_dec = Decimal(str(item["p"]))
             qty_dec = Decimal(str(item["q"]))
             quote_qty_dec = price_dec * qty_dec
-            event_time_us = int(item["T"]) * 1000
+            event_ts_ms = int(item.get("T") or item.get("E") or 0)
+            event_time_us = event_ts_ms * 1000
             is_bm = bool(item["m"])
             taker_side = "SELL" if is_bm else "BUY"
             signed_qty = -qty_dec if is_bm else qty_dec
             is_best_match = bool(item.get("M", True))
             is_block_trade = None
             is_rpi_trade = None
-            source_ts = int(item["T"])
+            source_ts = event_ts_ms
             source_unit = "epoch_ms"
             dq_flags = None
             seq_ordinal = idx
