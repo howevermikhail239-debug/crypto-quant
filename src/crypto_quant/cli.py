@@ -163,7 +163,17 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"status": "PASS", "created": [str(path) for path in created]}))
             return 0
         checks = health_checks(config)
-        print(json.dumps({"checks": [asdict(check) for check in checks]}))
+        from .ingestion.health import compute_collector_health
+        collector_health = compute_collector_health(
+            exchange="binance",
+            market_type="spot",
+            symbol="BTCUSDT",
+            root=root,
+        )
+        print(json.dumps({
+            "checks": [asdict(check) for check in checks],
+            "collector_health": collector_health.to_dict(),
+        }))
         return _status_exit(checks)
     except (OSError, ValueError, yaml.YAMLError) as error:
         print(json.dumps({"status": "FAIL", "error": str(error)}), file=sys.stderr)

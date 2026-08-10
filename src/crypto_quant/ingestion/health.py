@@ -1,12 +1,14 @@
-"""Collector Operational Health and Data Quality Guards (Phase 1C Item 7E).
+"""Collector Operational Health and Data Quality Guards (Phase 1C Item 7E Audit).
 
-Provides decoupled status tracking separating Availability vs Completeness:
+Provides decoupled status tracking separating Availability vs Completeness and disk thresholds:
 - Availability Status: HEALTHY, DEGRADED, RECONNECTING, FAILED
 - Completeness Status: COMPLETE, RECOVERED, PARTIAL, GAPPED, UNKNOWN
+- Disk Status: OK, WARNING, CRITICAL_STOP
 """
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -31,6 +33,12 @@ class CompletenessStatus(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class DiskThresholdStatus(StrEnum):
+    OK = "OK"
+    WARNING = "WARNING"
+    CRITICAL_STOP = "CRITICAL_STOP"
+
+
 @dataclass
 class CollectorHealthState:
     exchange: str
@@ -38,10 +46,28 @@ class CollectorHealthState:
     symbol: str
     availability: AvailabilityStatus
     completeness: CompletenessStatus
+    disk_status: DiskThresholdStatus
+    disk_free_bytes: int
     open_gap_count: int
     partial_gap_count: int
     unrecoverable_gap_count: int
     last_updated_at: datetime
+
+    def to_dict(self) -> dict[str, str | int]:
+        return {
+            "exchange": self.exchange,
+            "market_type": self.market_type,
+            "symbol": self.symbol,
+            "availability": self.availability.value,
+            "completeness": self.completeness.value,
+            "disk_status": self.disk_status.value,
+            "disk_free_bytes": self.disk_free_bytes,
+            "disk_free_gb": round(self.disk_free_bytes / (1024**3), 2),
+            "open_gap_count": self.open_gap_count,
+            "partial_gap_count": self.partial_gap_count,
+            "unrecoverable_gap_count": self.unrecoverable_gap_count,
+            "last_updated_at": self.last_updated_at.isoformat(),
+        }
 
 
 def compute_collector_health(
@@ -51,8 +77,10 @@ def compute_collector_health(
     symbol: str,
     root: Path,
     current_availability: AvailabilityStatus = AvailabilityStatus.HEALTHY,
+    warning_disk_gb: float = 100.0,
+    critical_disk_gb: float = 50.0,
 ) -> CollectorHealthState:
-    """Evaluates operational availability and data completeness using GapRegistry."""
+    """Evaluates operational availability, completeness, and disk thresholds."""
     registry = GapRegistry(root)
     all_gaps = registry.list_gaps()
 
@@ -73,12 +101,25 @@ def compute_collector_health(
     else:
         completeness = CompletenessStatus.COMPLETE
 
+    # Disk Space Check
+    total, used, free = shutil.disk_usage(root)
+    free_gb = free / (1024**3)
+
+    if free_gb < critical_disk_gb:
+        disk_status = DiskThresholdStatus.CRITICAL_STOP
+    elif free_gb < warning_disk_gb:
+        disk_status = DiskThresholdStatus.WARNING
+    else:
+        disk_status = DiskThresholdStatus.OK
+
     return CollectorHealthState(
         exchange=exchange,
         market_type=market_type,
         symbol=symbol,
         availability=current_availability,
         completeness=completeness,
+        disk_status=disk_status,
+        disk_free_bytes=free,
         open_gap_count=open_count,
         partial_gap_count=partial_count,
         unrecoverable_gap_count=unrecoverable_count,
