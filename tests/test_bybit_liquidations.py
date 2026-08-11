@@ -42,6 +42,21 @@ def test_bybit_liquidation_frozen_yaml_contract_validates():
     assert contract.market_type == "perpetual"
     assert len(contract.fields) == 8
 
+    # T field must be documented as event_updated_time (NOT event_trade_time or fill time)
+    t_field = next(f for f in contract.fields if f.source_field == "data[].T")
+    assert t_field.timestamp_meaning == "event_updated_time", (
+        "T is official Bybit 'updated time', not trade/fill/execution time"
+    )
+
+    # v field unit must be base_coin (VERIFIED for BTCUSDT Linear)
+    v_field = next(f for f in contract.fields if f.source_field == "data[].v")
+    assert v_field.source_unit == "base_coin"
+
+    # YAML must document completeness split and native_event_id
+    assert data["stream_rules"]["source_claimed_completeness"] == "ALL_LIQUIDATIONS"
+    assert data["stream_rules"]["delivery_semantics"] == "BATCHED_500MS_PUSH"
+    assert data["native_event_id"] == "NONE"
+
 
 def test_bybit_liquidation_side_semantics_truth_table():
     """Proves official Bybit side semantics:
@@ -96,9 +111,16 @@ def test_bybit_liquidation_price_semantics_and_units():
     assert rec.source_price == "58999.50"
     assert rec.average_fill_price is None, "Bybit does not provide execution fill price; no synthetic guessing"
     assert rec.source_quantity == "0.12345678"
-    assert rec.source_quantity_unit == "base_coin"
+    assert rec.source_quantity_unit == "base_coin"  # VERIFIED: BTCUSDT Linear qty in base coin (BTC)
     assert rec.quantity_base == "0.12345678"
     assert rec.notional_quote is None, "No silent synthetic multiplication without versioned derivation lineage"
+
+    # T semantic: event_time must be the updated timestamp T from the message (not ts/exchange_timestamp)
+    from crypto_quant.time import parse_epoch
+    expected_event_time = parse_epoch(1786434825244, unit="ms")
+    assert rec.event_time == expected_event_time, "event_time must map to T (updated timestamp), not ts"
+    expected_exchange_ts = parse_epoch(1786434825553, unit="ms")
+    assert rec.exchange_timestamp == expected_exchange_ts, "exchange_timestamp must map to ts (system push time)"
 
 
 def test_bybit_liquidation_batch_identical_events_preserves_multiplicity():
@@ -262,10 +284,11 @@ def test_bybit_liquidation_dq_validation_catches_errors():
         order_type=None,
         time_in_force=None,
         order_status=None,
-        completeness_class="UNTHROTTLED_EVENT_STREAM",
+        source_claimed_completeness="ALL_LIQUIDATIONS",
+        delivery_semantics="BATCHED_500MS_PUSH",
         message_id="msg1",
         dedup_fingerprint="fp1",
-        dedup_collision_risk="LOW",
+        dedup_guarantee="EXACT_WIRE_REPLAY_ONLY",
         source=DATASET_ID,
         source_contract_version=CONTRACT_ID,
         schema_version="1.0.0",
@@ -374,7 +397,8 @@ def test_persist_bybit_liquidation_batch_end_to_end_and_idempotent():
         assert mdata["exchange"] == "bybit"
         assert mdata["symbol"] == "BTCUSDT"
         assert mdata["row_count"] == 2
-        assert mdata["completeness_class"] == "UNTHROTTLED_EVENT_STREAM"
+        assert mdata["source_claimed_completeness"] == "ALL_LIQUIDATIONS"
+        assert mdata["delivery_semantics"] == "BATCHED_500MS_PUSH"
 
         # Verify Checkpoint
         chk_file = root / "control" / "checkpoints" / "bybit_linear_liquidations_BTCUSDT.json"
@@ -471,3 +495,78 @@ async def test_collect_bybit_liquidations_live_mocked(monkeypatch):
         assert len(parquet_files) == 1
         tbl = pq.ParquetFile(parquet_files[0]).read()
         assert len(tbl) == 2
+
+
+def test_dedup_guarantee_boundary_cross_envelope_not_guaranteed():
+    """Proves the dedup_guarantee boundary:
+    - exact-wire replay (same raw envelope): GUARANTEED deduplicated
+    - same economic event in DIFFERENT envelope (different ts): NOT deduplicated
+
+    Bybit allLiquidation provides NO native per-event ID.
+    Cross-envelope economic-event dedup is NOT guaranteed by design.
+    Project policy: preserve uncertain events rather than risk dropping distinct events.
+    """
+    ident = funding_identity("BTCUSDT")
+    recv_t = datetime(2026, 8, 11, 10, 0, 0, tzinfo=UTC)
+
+    # Same event content, but delivered in two different WS envelopes with different 'ts'
+    # This simulates Bybit re-delivering the event in a new envelope on reconnect or rebroadcast.
+    msg_envelope_1 = json.dumps({
+        "topic": "allLiquidation.BTCUSDT",
+        "type": "snapshot",
+        "ts": 1786434825553,  # first envelope timestamp
+        "data": [{"T": 1786434825100, "s": "BTCUSDT", "S": "Buy", "v": "1.0", "p": "62000.00"}],
+    })
+    msg_envelope_2 = json.dumps({
+        "topic": "allLiquidation.BTCUSDT",
+        "type": "snapshot",
+        "ts": 1786434825999,  # different envelope timestamp (same economic event)
+        "data": [{"T": 1786434825100, "s": "BTCUSDT", "S": "Buy", "v": "1.0", "p": "62000.00"}],
+    })
+
+    recs_1 = parse_bybit_liquidation_message(json.loads(msg_envelope_1), ident, received_at=recv_t, raw_msg_str=msg_envelope_1)
+    recs_2 = parse_bybit_liquidation_message(json.loads(msg_envelope_2), ident, received_at=recv_t, raw_msg_str=msg_envelope_2)
+
+    # Each envelope gets a different message_id (different ts)
+    assert recs_1[0].message_id != recs_2[0].message_id
+
+    # Therefore dedup_fingerprint differs -> cross-envelope dedup is NOT guaranteed
+    assert recs_1[0].dedup_fingerprint != recs_2[0].dedup_fingerprint
+
+    # The dedup_guarantee field explicitly documents this limitation
+    assert recs_1[0].dedup_guarantee == "EXACT_WIRE_REPLAY_ONLY"
+
+    # Same envelope re-delivered -> same fingerprint -> IS deduplicated
+    recs_1_replay = parse_bybit_liquidation_message(json.loads(msg_envelope_1), ident, received_at=recv_t, raw_msg_str=msg_envelope_1)
+    assert recs_1[0].dedup_fingerprint == recs_1_replay[0].dedup_fingerprint, "Exact-wire replay MUST produce same fingerprint"
+
+
+def test_transport_pass_does_not_imply_data_completeness():
+    """Proves that status=PASS + event_observation_status=NO_EVENT_OBSERVED does NOT mean data is complete.
+
+    This is the critical transport vs. observation vs. completeness distinction:
+    - transport_status = PASS: WebSocket connection and subscription confirmed.
+    - event_observation_status = NO_EVENT_OBSERVED_WITHIN_WINDOW: 0 events in capture window (e.g., quiet market).
+    - local capture completeness: UNKNOWN / PARTIAL (there may have been events we missed before connecting).
+
+    These three must not be conflated. A 0-event PASS window does NOT certify historical completeness.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        root = Path(tmp_dir)
+        # Zero-event batch
+        res = persist_bybit_liquidation_batch([], "BTCUSDT", root)
+
+        # Transport / pipeline status
+        assert res["status"] == "PASS"
+
+        # Event observation status: honestly NO_EVENT_OBSERVED
+        assert res["event_observation_status"] == "NO_EVENT_OBSERVED_WITHIN_WINDOW"
+        assert res["records_count"] == 0
+
+        # No storage mutations: no manifest, no parquet written
+        assert not (root / "control" / "manifests" / "bybit_linear_liquidations.jsonl").exists()
+        norm_dir = root / "normalized" / "liquidations"
+        assert not norm_dir.exists() or list(norm_dir.rglob("*.parquet")) == []
+
+        # status=PASS here means pipeline health, NOT completeness
+        # local_capture_completeness is implicitly UNKNOWN for this window

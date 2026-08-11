@@ -1,6 +1,9 @@
 """Bybit Linear Liquidations Ingestion and Normalization (Phase 1D.3A).
 
-Consumes unthrottled real-time liquidations from WebSocket topic `allLiquidation.{symbol}`.
+Consumes real-time liquidations from WebSocket topic `allLiquidation.{symbol}`.
+Bybit claims all liquidations are reported (source_claimed_completeness=ALL_LIQUIDATIONS).
+Delivery is batched every 500 ms (delivery_semantics=BATCHED_500MS_PUSH).
+
 Enforces:
 - Canonical identity: market_type='perpetual', contract_type='linear_perpetual', venue_product_type='linear'
 - Natural key: (exchange, instrument_id, event_time, dedup_fingerprint)
@@ -8,10 +11,16 @@ Enforces:
     * S="Buy"  -> position_side_liquidated="LONG"  (long position liquidated via forced buy order)
     * S="Sell" -> position_side_liquidated="SHORT" (short position liquidated via forced sell order)
 - Explicit Price Semantics: price_semantic="bankruptcy_price" (p is bankruptcy price in Bybit contract)
-- Decimal preservation: raw string decimal for executed size (v) and price (p)
+- Explicit T Semantics: T is the liquidation event *updated* timestamp (ms); NOT a fill/execution/trade time.
+  Source: Bybit V5 allLiquidation official documentation (VERIFIED)
+- Quantity semantics: v is executed size in base coin (BTC for BTCUSDT Linear). Contract size = 1 BTC.
+  Source: Bybit V5 API contract size and qty denomination docs (VERIFIED)
+- Decimal preservation: raw string decimal for size (v) and price (p)
 - Realtime Knowledge Time: knowledge_time = received_at (UTC arrival timestamp to eliminate look-ahead leakage)
-- Message ID != Event ID: message_id is envelope hash; dedup_fingerprint is event-level content hash
-- Completeness Semantics: completeness_class="UNTHROTTLED_EVENT_STREAM"
+- Message ID = SHA-256 of raw WS envelope. No native per-event ID in stream.
+  Dedup guarantee boundary:
+    exact-wire replay: GUARANTEED (message_id + event_index fingerprint)
+    cross-envelope economic-event dedup: NOT GUARANTEED (no native event_id from Bybit)
 - Immutable Parquet storage with content-addressed generations, manifests, checkpoints, and DQ validation.
 """
 
@@ -82,9 +91,9 @@ def bybit_linear_liquidation_data_contract() -> DataContract:
         ),
         ContractField(
             source_field="data[].T",
-            semantic_meaning="Liquidation event updated timestamp, ms",
+            semantic_meaning="Liquidation event updated timestamp, ms (official: 'updated time')",
             source_unit="ms",
-            timestamp_meaning="event_trade_time",
+            timestamp_meaning="event_updated_time",  # VERIFIED: Bybit docs say 'updated timestamp', NOT fill/trade time
             nullable=False,
             canonical_field="event_time",
             transformation="parse_epoch_ms_utc",
@@ -108,7 +117,10 @@ def bybit_linear_liquidation_data_contract() -> DataContract:
         ),
         ContractField(
             source_field="data[].v",
-            semantic_meaning="Executed liquidation volume in base asset contracts",
+            # VERIFIED: official docs label = 'Executed size' (string). Economic unit for BTCUSDT Linear = base coin (BTC).
+            # Bybit V5 linear perpetual contract size = 1 BTC; qty denominated in base coin.
+            # Source: bybit-exchange.github.io/docs/v5/websocket/public/all-liquidation
+            semantic_meaning="Executed liquidation size in base coin (BTC for BTCUSDT Linear)",
             source_unit="base_coin",
             nullable=False,
             canonical_field="source_quantity",
@@ -182,10 +194,17 @@ class CanonicalLiquidationRecord:
     order_status: str | None  # None for Bybit
 
     # 7. Completeness & Provenance
-    completeness_class: str  # 'UNTHROTTLED_EVENT_STREAM'
-    message_id: str  # Hash of raw WebSocket message
-    dedup_fingerprint: str  # Event-level content hash
-    dedup_collision_risk: str  # 'LOW'
+    # source_claimed_completeness: Bybit claims ALL_LIQUIDATIONS are pushed
+    # delivery_semantics: BATCHED_500MS_PUSH (not unthrottled; batched at 500ms intervals)
+    # local_capture_completeness: depends on connection uptime and local gaps
+    source_claimed_completeness: str  # 'ALL_LIQUIDATIONS' (Bybit claim)
+    delivery_semantics: str  # 'BATCHED_500MS_PUSH'
+    # Dedup boundary:
+    #   exact-wire replay dedup: GUARANTEED (message_id = raw envelope hash; dedup_fingerprint = event content hash)
+    #   cross-envelope economic-event dedup: NOT GUARANTEED (no native per-event ID in stream)
+    message_id: str  # SHA-256 of raw WebSocket envelope string
+    dedup_fingerprint: str  # SHA-256 of (symbol|T|S|p|v|message_id|event_index)
+    dedup_guarantee: str  # 'EXACT_WIRE_REPLAY_ONLY'
     source: str
     source_contract_version: str
     schema_version: str
@@ -262,8 +281,15 @@ def parse_bybit_liquidation_message(
         if price_dec <= 0:
             raise ValueError(f"Non-positive price value: {price_dec}")
 
-        # Deterministic event fingerprint: incorporates message identity and intra-batch event_index
-        # to safely preserve multiplicity of identical events while preventing duplicate deliveries on reconnect.
+        # Deterministic event fingerprint: incorporates message identity and intra-batch event_index.
+        # Guarantees:
+        #   1. Same raw WS envelope re-delivered on reconnect -> same dedup_fingerprint -> deduplicated.
+        #   2. Two distinct events in one batch with identical content -> different event_idx -> distinct fingerprints.
+        # Limitation:
+        #   Bybit allLiquidation has NO native per-event ID or sequence number.
+        #   If Bybit re-delivers the same economic event in a DIFFERENT envelope (different ts or batch),
+        #   it will produce a different message_id and therefore a different dedup_fingerprint.
+        #   Cross-envelope economic-event dedup is NOT GUARANTEED.
         fp_str = (
             f"bybit|{ident.native_symbol}|{raw_event_t}|{raw_side_str}|{str(price_dec)}|{str(size_dec)}|"
             f"{msg_id}|{event_idx}"
@@ -281,26 +307,27 @@ def parse_bybit_liquidation_message(
             exchange_timestamp=exchange_ts,
             received_at=received_at,
             processed_at=proc_at,
-            knowledge_time=received_at,  # Realtime knowledge time is arrival time
+            knowledge_time=received_at,  # Realtime: knowledge_time = received_at (arrival UTC timestamp)
             position_side_liquidated=pos_side,
             source_side=raw_side_str,
             source_side_semantic="LIQUIDATED_POSITION_SIDE",
             source_quantity=str(size_dec),
-            source_quantity_unit="base_coin",
+            source_quantity_unit="base_coin",  # VERIFIED: BTCUSDT Linear qty in base coin (BTC)
             quantity_base=str(size_dec),
-            notional_quote=None,
+            notional_quote=None,  # No silent synthetic multiplication
             last_filled_quantity=None,
             accumulated_filled_quantity=None,
             source_price=str(price_dec),
-            price_semantic="bankruptcy_price",
+            price_semantic="bankruptcy_price",  # VERIFIED: p = bankruptcy price, not fill price
             average_fill_price=None,
             order_type=None,
             time_in_force=None,
             order_status=None,
-            completeness_class="UNTHROTTLED_EVENT_STREAM",
+            source_claimed_completeness="ALL_LIQUIDATIONS",  # Bybit claim: all liquidations pushed
+            delivery_semantics="BATCHED_500MS_PUSH",         # Delivery: batched at 500ms intervals
             message_id=msg_id,
             dedup_fingerprint=dedup_fp,
-            dedup_collision_risk="LOW",
+            dedup_guarantee="EXACT_WIRE_REPLAY_ONLY",  # Cross-envelope dedup NOT guaranteed (no native event ID)
             source=DATASET_ID,
             source_contract_version=CONTRACT_ID,
             schema_version=SCHEMA_VERSION,
@@ -370,10 +397,11 @@ def records_to_pyarrow_liquidation_table(records: list[CanonicalLiquidationRecor
             ("order_type", pa.string()),
             ("time_in_force", pa.string()),
             ("order_status", pa.string()),
-            ("completeness_class", pa.string()),
+            ("source_claimed_completeness", pa.string()),
+            ("delivery_semantics", pa.string()),
             ("message_id", pa.string()),
             ("dedup_fingerprint", pa.string()),
-            ("dedup_collision_risk", pa.string()),
+            ("dedup_guarantee", pa.string()),
             ("source", pa.string()),
             ("source_contract_version", pa.string()),
             ("schema_version", pa.string()),
@@ -409,10 +437,11 @@ def records_to_pyarrow_liquidation_table(records: list[CanonicalLiquidationRecor
         "order_type": [r.order_type for r in records],
         "time_in_force": [r.time_in_force for r in records],
         "order_status": [r.order_status for r in records],
-        "completeness_class": [r.completeness_class for r in records],
+        "source_claimed_completeness": [r.source_claimed_completeness for r in records],
+        "delivery_semantics": [r.delivery_semantics for r in records],
         "message_id": [r.message_id for r in records],
         "dedup_fingerprint": [r.dedup_fingerprint for r in records],
-        "dedup_collision_risk": [r.dedup_collision_risk for r in records],
+        "dedup_guarantee": [r.dedup_guarantee for r in records],
         "source": [r.source for r in records],
         "source_contract_version": [r.source_contract_version for r in records],
         "schema_version": [r.schema_version for r in records],
@@ -483,10 +512,11 @@ def merge_and_write_liquidation_parquet(
                     order_type=existing_table["order_type"][i].as_py(),
                     time_in_force=existing_table["time_in_force"][i].as_py(),
                     order_status=existing_table["order_status"][i].as_py(),
-                    completeness_class=existing_table["completeness_class"][i].as_py(),
+                    source_claimed_completeness=existing_table["source_claimed_completeness"][i].as_py(),
+                    delivery_semantics=existing_table["delivery_semantics"][i].as_py(),
                     message_id=existing_table["message_id"][i].as_py(),
                     dedup_fingerprint=existing_table["dedup_fingerprint"][i].as_py(),
-                    dedup_collision_risk=existing_table["dedup_collision_risk"][i].as_py(),
+                    dedup_guarantee=existing_table["dedup_guarantee"][i].as_py(),
                     source=existing_table["source"][i].as_py(),
                     source_contract_version=existing_table["source_contract_version"][i].as_py(),
                     schema_version=existing_table["schema_version"][i].as_py(),
@@ -525,10 +555,11 @@ def merge_and_write_liquidation_parquet(
             order_type=rec.order_type,
             time_in_force=rec.time_in_force,
             order_status=rec.order_status,
-            completeness_class=rec.completeness_class,
+            source_claimed_completeness=rec.source_claimed_completeness,
+            delivery_semantics=rec.delivery_semantics,
             message_id=rec.message_id,
             dedup_fingerprint=rec.dedup_fingerprint,
-            dedup_collision_risk=rec.dedup_collision_risk,
+            dedup_guarantee=rec.dedup_guarantee,
             source=rec.source,
             source_contract_version=rec.source_contract_version,
             schema_version=rec.schema_version,
@@ -683,7 +714,8 @@ def persist_bybit_liquidation_batch(
         "observed_coverage_end": sorted_records[-1].event_time.isoformat(),
         "row_count": len(sorted_records),
         "total_accumulated_rows": total_dataset_rows,
-        "completeness_class": "UNTHROTTLED_EVENT_STREAM",
+        "source_claimed_completeness": "ALL_LIQUIDATIONS",
+        "delivery_semantics": "BATCHED_500MS_PUSH",
         "raw_object_ref": str(raw_file.relative_to(root)).replace("\\", "/"),
         "raw_sha256": raw_hash,
         "raw_bytes": len(raw_bytes),
@@ -721,7 +753,8 @@ def persist_bybit_liquidation_batch(
         "observed_source_coverage_end": sorted_records[-1].event_time.isoformat(),
         "batch_records": len(sorted_records),
         "total_records": total_dataset_rows,
-        "completeness_class": "UNTHROTTLED_EVENT_STREAM",
+        "source_claimed_completeness": "ALL_LIQUIDATIONS",
+        "delivery_semantics": "BATCHED_500MS_PUSH",
         "updated_at": retrieved_iso,
     }
     chk_file.write_text(json.dumps(chk_payload, indent=2), encoding="utf-8")
