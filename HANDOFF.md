@@ -23,11 +23,13 @@
 
 ## C. CURRENT GIT STATE
 - **Branch:** master
-- **HEAD:** 302b8d7
+- **HEAD:** `137ef3953704ed930034d9b44157d432d6bffaa2` (PHASE 1D.3C acceptance commit; this HANDOFF update follows as docs-only)
 - **Working Tree:** clean (after this handoff commit)
-- **Test Count:** 215 passed
+- **Test Count:** 231 passed
 
 **Latest important commits:**
+- `137ef39` — Phase 1D.3C independent acceptance: Binance liquidation provenance and completeness
+- `5abcfae` — Phase 1D.3C Binance USD-M BTCUSDT liquidation pilot
 - `302b8d7` — Phase 1D.3B independent acceptance
 - `34d52ea` — Bybit ETHUSDT liquidation parity
 - `735544c` — Phase 1D.3A final semantic closure
@@ -45,15 +47,16 @@
 - PHASE 1D.2 (Open Interest): **FINAL DONE / ACCEPTED**
 - PHASE 1D.3A (Bybit Linear BTCUSDT Liquidations): **FINAL DONE / ACCEPTED**
 - PHASE 1D.3B (Bybit Linear ETHUSDT Liquidations): **FINAL DONE / ACCEPTED**
+- PHASE 1D.3C (Binance USD-M BTCUSDT Liquidations): **FINAL DONE / ACCEPTED**
 
 **Next Authorized Step (and ONLY step allowed next):**
-- **PHASE 1D.3C**: Binance USD-M BTCUSDT Liquidations
+- **PHASE 1D.3D**: Binance USD-M ETHUSDT Liquidations Parity
 
 ## E. DATA LOCATIONS
 - **Repository:** `C:\Users\Admin\Documents\ChatGPT\анализ крипты`
 - **External market/control data:** `C:\crypto_quant_data` (Not in Git)
 - **Evidence for liquidation source/archive audit:** `C:\crypto_quant_data\evidence\phase1d3_audit`
-- **Evidence Index:** `phase1d3_audit_evidence_index.json` (Currently 20 artifacts, 20/20 hash-valid, 0 broken)
+- **Evidence Index:** `phase1d3_audit_evidence_index.json` (27 artifacts, 27/27 hash-valid; 25 accepted evidence artifacts and 2 preserved invalid empty WAF-challenge responses)
 
 ## F. CRITICAL GLOBAL INVARIANTS
 - UTC canonical storage
@@ -107,6 +110,19 @@
 - Two identical-content events inside one batch MUST preserve multiplicity.
 - **cross-envelope economic-event dedup = NOT GUARANTEED.** Do not add heuristic dedup without source proof.
 
+## I.1 BINANCE LIQUIDATIONS 1D.3C ACCEPTED CONTRACT
+- **Accepted commit:** `137ef3953704ed930034d9b44157d432d6bffaa2`
+- **Normative source contract:** `schemas/contracts/binance_usdm_liquidation_ws_v1.yaml`
+- **WebSocket mode:** `REQUEST_SUBSCRIBE` on `wss://fstream.binance.com/market/ws`
+- **Topic:** `btcusdt@forceOrder`
+- **Selection:** at most one selected observation per symbol per 1000 ms; `DOC_CONFLICT_LATEST_VS_LARGEST`
+- **Completeness:** `INCOMPLETE_THROTTLED_SNAPSHOT`; never complete event tape/volume/cascade ground truth
+- **Times:** `event_time=o.T`, `exchange_timestamp=E`, realtime `knowledge_time=received_at`
+- **Fields:** q/l/z and p/ap remain distinct; `source_side` preserved; `position_side_liquidated=UNKNOWN`
+- **Identity:** Binance USD-M BTCUSDT `ins_dae8124762a847d14263`
+- **Genuine event:** one BTC observation captured; raw/Parquet/manifest/checkpoint lineage independently reconciled
+- **Production invariant:** active genuine BTC rows = 1; active synthetic rows = 0
+
 ## J. SYNTHETIC CONTAMINATION HISTORY
 - During early 1D.3A, a synthetic test batch was accidentally written to `C:\crypto_quant_data`.
 - It was quarantined with audit trail preserved.
@@ -120,9 +136,11 @@
 Until a verified source exists, missed realtime WS events are UNRECOVERABLE / UNKNOWN.
 
 ## L. REAL LIVE EVENT STATUS
-- BTC bounded WebSocket soak tests PROVED: connection, subscription ACK, heartbeat ping/pong, quiet-period liveness.
-- Genuine BTC liquidation in short windows = NO. (This is NOT a blocker).
-- Real production event lineage is DEFERRED_TO_PHASE_1D3F (soak/gap/DQ/reconciliation). Do not run infinite market event waits now.
+- Bybit bounded WebSocket tests proved connection, subscription ACK, heartbeat ping/pong and quiet-period liveness; no genuine Bybit liquidation was observed in the short accepted windows.
+- Binance USD-M BTCUSDT bounded Market WebSocket pilot captured and persisted one genuine liquidation observation.
+- Genuine Binance BTC raw → normalized → manifest → checkpoint lineage is accepted; raw and Parquet hashes independently reconciled.
+- Binance source completeness remains `INCOMPLETE_THROTTLED_SNAPSHOT`, selection rule `DOC_CONFLICT_LATEST_VS_LARGEST`.
+- PHASE 1D.3F remains responsible for longer soak, gaps, local completeness/DQ and cross-source operational behavior. Do not run infinite market-event waits now.
 
 ## M. STRATEGY ARCHITECTURE RESERVATION
 - **Critical Long-Term User Invariant:** The system in Phases 2–4 must support N independently versioned strategies without global redesign.
@@ -135,21 +153,20 @@ Until a verified source exists, missed realtime WS events are UNRECOVERABLE / UN
 - **CRITICAL IMPERATIVE:** DO NOT IMPLEMENT STRATEGY ENGINE NOW. This is purely an architectural reservation.
 
 ## N. NEXT TASK FOR CODEX
-**NEXT: PHASE 1D.3C — Binance USD-M BTCUSDT Liquidations**
-- **Main Goal:** Implement a source-contract-first, symbol-specific Binance USD-M BTCUSDT liquidation vertical slice without importing Bybit completeness or field semantics.
+**NEXT: PHASE 1D.3D — Binance USD-M ETHUSDT Liquidations Parity**
+- **Main Goal:** Extend the accepted source-contract-first Binance USD-M liquidation semantics to ETHUSDT as a separate canonical instrument without changing the accepted BTC generation or importing Bybit semantics.
 - **Checklist:**
-  - current official WebSocket routing and migration evidence
-  - latest-versus-largest 1000 ms selection conflict
-  - public stream versus private USER_DATA history separation
-  - precise q/l/z, p/ap, E/T and side semantics
-  - canonical Binance USD-M BTC identity
-  - source-selection incompleteness as first-class DQ
+  - preserve documented `REQUEST_SUBSCRIBE` Market routing
+  - preserve `DOC_CONFLICT_LATEST_VS_LARGEST` and 1000 ms source incompleteness
+  - canonical Binance USD-M ETHUSDT identity distinct from BTC/Bybit/Spot
+  - prove ETH q/l/z base-unit mapping from current metadata/contract evidence
+  - preserve q/l/z, p/ap, E/T and conservative side semantics
   - wrong-symbol fail-closed
   - immutable raw
   - immutable normalized generations
   - manifest/checkpoint lineage
-  - bounded BTC WebSocket transport test
-- **Do not start Binance ETHUSDT, long soak, features, signals, strategies, or general refactoring.**
+  - bounded ETH WebSocket transport test; zero events remains an acceptable bounded outcome
+- **Do not start all-market streams, long soak, features, signals, strategies, or general refactoring.**
 
 ## O. VALIDATION COMMANDS FOR NEXT AGENT
 Run these exactly as specified:
