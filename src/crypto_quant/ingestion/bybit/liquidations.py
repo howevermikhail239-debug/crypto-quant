@@ -225,7 +225,7 @@ def parse_bybit_liquidation_message(
     proc_at = utc_now()
     records: list[CanonicalLiquidationRecord] = []
 
-    for item in data_items:
+    for event_idx, item in enumerate(data_items):
         sym = item.get("s")
         if sym != ident.native_symbol:
             raise ValueError(f"Symbol mismatch in data item: expected '{ident.native_symbol}', got '{sym}'")
@@ -262,8 +262,12 @@ def parse_bybit_liquidation_message(
         if price_dec <= 0:
             raise ValueError(f"Non-positive price value: {price_dec}")
 
-        # Deterministic event fingerprint
-        fp_str = f"bybit|{ident.native_symbol}|{raw_event_t}|{raw_side_str}|{str(price_dec)}|{str(size_dec)}|{raw_ts}"
+        # Deterministic event fingerprint: incorporates message identity and intra-batch event_index
+        # to safely preserve multiplicity of identical events while preventing duplicate deliveries on reconnect.
+        fp_str = (
+            f"bybit|{ident.native_symbol}|{raw_event_t}|{raw_side_str}|{str(price_dec)}|{str(size_dec)}|"
+            f"{msg_id}|{event_idx}"
+        )
         dedup_fp = hashlib.sha256(fp_str.encode("utf-8")).hexdigest()
 
         rec = CanonicalLiquidationRecord(
@@ -565,7 +569,7 @@ def merge_and_write_liquidation_parquet(
 
 
 def persist_bybit_liquidation_batch(
-    raw_messages: list[dict[str, Any]],
+    raw_messages: list[dict[str, Any] | tuple[dict[str, Any], str]],
     symbol: str,
     root: Path,
     received_at: datetime | None = None,
@@ -583,14 +587,24 @@ def persist_bybit_liquidation_batch(
 
     # 1. Parse and normalize all items in the batch
     all_records: list[CanonicalLiquidationRecord] = []
-    for msg in raw_messages:
-        recs = parse_bybit_liquidation_message(msg, ident, received_at=received_at)
+    unpacked_raw_msgs: list[dict[str, Any]] = []
+    unpacked_raw_strs: list[str] = []
+
+    for item in raw_messages:
+        if isinstance(item, tuple):
+            msg_dict, msg_str = item
+        else:
+            msg_dict, msg_str = item, json.dumps(item, sort_keys=True)
+        unpacked_raw_msgs.append(msg_dict)
+        unpacked_raw_strs.append(msg_str)
+        recs = parse_bybit_liquidation_message(msg_dict, ident, received_at=received_at, raw_msg_str=msg_str)
         all_records.extend(recs)
 
     if not all_records:
         return {
             "symbol": symbol,
-            "status": "EMPTY",
+            "status": "PASS",
+            "event_observation_status": "NO_EVENT_OBSERVED_WITHIN_WINDOW",
             "records_count": 0,
             "total_accumulated_rows": 0,
         }
@@ -600,11 +614,11 @@ def persist_bybit_liquidation_batch(
     if dq_issues:
         raise ValueError(f"Bybit Liquidation DQ validation failed: {dq_issues[:5]}")
 
-    # 3. Persist Raw JSONL with content hash
+    # 3. Persist Raw JSONL with exact content hash
     sorted_records = sorted(all_records, key=lambda r: (r.event_time, r.dedup_fingerprint))
     min_ts_iso = sorted_records[0].event_time.strftime("%Y%m%dT%H%M%SZ")
     max_ts_iso = sorted_records[-1].event_time.strftime("%Y%m%dT%H%M%SZ")
-    raw_bytes = ("\n".join(json.dumps(msg) for msg in raw_messages) + "\n").encode("utf-8")
+    raw_bytes = ("\n".join(unpacked_raw_strs) + "\n").encode("utf-8")
     raw_hash = hashlib.sha256(raw_bytes).hexdigest()
 
     date_str = sorted_records[0].event_time.strftime("%Y-%m-%d")
@@ -684,6 +698,7 @@ def persist_bybit_liquidation_batch(
         "known_limitations": [
             "price represents bankruptcy price, not execution fill price",
             "historical archive unavailable from venue; local history starts from first captured realtime event",
+            "message label snapshot is batch envelope metadata tag and does not imply state replacement",
         ],
         "retrieved_at": retrieved_iso,
         "processed_at": utc_now().isoformat(),
@@ -714,6 +729,7 @@ def persist_bybit_liquidation_batch(
     return {
         "symbol": symbol,
         "status": "PASS",
+        "event_observation_status": "REAL_EVENT_OBSERVED",
         "records_count": len(sorted_records),
         "total_accumulated_rows": total_dataset_rows,
         "observed_source_coverage_start": sorted_records[0].event_time.isoformat(),
@@ -739,7 +755,7 @@ async def collect_bybit_liquidations_live(
     topic = f"allLiquidation.{symbol}"
     logger.info(f"Connecting to Bybit WebSocket: {ws_url} (subscribing to {topic})")
 
-    buffered_raw_messages: list[dict[str, Any]] = []
+    buffered_raw_messages: list[tuple[dict[str, Any], str]] = []
     total_messages_received = 0
     total_records_persisted = 0
     start_time = time.time()
@@ -769,7 +785,7 @@ async def collect_bybit_liquidations_live(
                 msg_str = await asyncio.wait_for(ws.recv(), timeout=1.0)
                 msg = json.loads(msg_str)
                 if msg.get("topic") == topic and "data" in msg:
-                    buffered_raw_messages.append(msg)
+                    buffered_raw_messages.append((msg, msg_str))
                     total_messages_received += 1
             except TimeoutError:
                 pass
@@ -802,9 +818,13 @@ async def collect_bybit_liquidations_live(
             total_records_persisted += res.get("records_count", 0)
             buffered_raw_messages.clear()
 
+    obs_status = "REAL_EVENT_OBSERVED" if total_records_persisted > 0 else "NO_EVENT_OBSERVED_WITHIN_WINDOW"
+
     return {
         "symbol": symbol,
         "status": "PASS",
+        "transport_status": "PASS",
+        "event_observation_status": obs_status,
         "total_messages_received": total_messages_received,
         "total_records_persisted": total_records_persisted,
         "duration_seconds": round(time.time() - start_time, 2),

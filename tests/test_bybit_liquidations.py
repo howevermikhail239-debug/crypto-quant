@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
+import yaml
 
 from crypto_quant.contracts import DataContract
 from crypto_quant.ingestion.binance.funding import funding_identity
@@ -22,7 +23,17 @@ from crypto_quant.ingestion.bybit.liquidations import (
 )
 
 
-def test_bybit_liquidation_data_contract_loads_and_validates():
+def test_bybit_liquidation_frozen_yaml_contract_validates():
+    """Validates frozen YAML contract file and Python DataContract definition."""
+    yaml_path = Path("schemas/contracts/bybit_linear_all_liquidation_ws_v1.yaml")
+    assert yaml_path.exists(), "Frozen YAML contract must exist"
+    data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    assert data["contract_id"] == "bybit.linear.ws.all-liquidation.v1"
+    assert data["exchange"] == "bybit"
+    assert data["market_type"] == "perpetual"
+    assert data["source_kind"] == "websocket"
+    assert len(data["fields"]) == 8
+
     contract = bybit_linear_liquidation_data_contract()
     assert isinstance(contract, DataContract)
     assert contract.contract_id == CONTRACT_ID
@@ -90,8 +101,8 @@ def test_bybit_liquidation_price_semantics_and_units():
     assert rec.notional_quote is None, "No silent synthetic multiplication without versioned derivation lineage"
 
 
-def test_bybit_liquidation_batch_message_parsing_preserves_unique_fingerprints():
-    """Proves that multiple items in one WebSocket message share message_id but have unique dedup_fingerprints."""
+def test_bybit_liquidation_batch_identical_events_preserves_multiplicity():
+    """Proves that two identical-content events in a single batch are NOT silently collapsed."""
     ident = funding_identity("BTCUSDT")
     recv_t = datetime(2026, 8, 11, 10, 0, 0, tzinfo=UTC)
 
@@ -101,18 +112,84 @@ def test_bybit_liquidation_batch_message_parsing_preserves_unique_fingerprints()
         "ts": 1786434825553,
         "data": [
             {"T": 1786434825100, "s": "BTCUSDT", "S": "Buy", "v": "1.0", "p": "60000.00"},
-            {"T": 1786434825200, "s": "BTCUSDT", "S": "Sell", "v": "2.0", "p": "61000.00"},
+            {"T": 1786434825100, "s": "BTCUSDT", "S": "Buy", "v": "1.0", "p": "60000.00"},  # Identical content
         ],
     }
     recs = parse_bybit_liquidation_message(raw_msg, ident, received_at=recv_t)
     assert len(recs) == 2
 
-    # Both share identical message_id (same raw WebSocket packet)
+    # Both share identical message_id
     assert recs[0].message_id == recs[1].message_id
 
-    # Each has a distinct dedup_fingerprint
+    # Each has a distinct dedup_fingerprint (incorporating event_index)
     assert recs[0].dedup_fingerprint != recs[1].dedup_fingerprint
-    assert recs[0].event_time < recs[1].event_time
+
+    # Writing to Parquet preserves both distinct events
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        yr_dir = Path(tmp_dir) / "year=2026"
+        p_path, total_rows, _, _ = merge_and_write_liquidation_parquet(yr_dir, "BTCUSDT", 2026, recs)
+        assert total_rows == 2, "Both identical events in one batch must be preserved without loss"
+        tbl = pq.ParquetFile(p_path).read()
+        assert len(tbl) == 2
+
+
+def test_bybit_liquidation_duplicate_delivery_is_safely_deduplicated():
+    """Proves that re-delivering the exact same raw message does not duplicate rows."""
+    ident = funding_identity("BTCUSDT")
+    recv_t = datetime(2026, 8, 11, 10, 0, 0, tzinfo=UTC)
+
+    raw_msg_str = json.dumps({
+        "topic": "allLiquidation.BTCUSDT",
+        "type": "snapshot",
+        "ts": 1786434825553,
+        "data": [{"T": 1786434825100, "s": "BTCUSDT", "S": "Buy", "v": "1.0", "p": "60000.00"}],
+    })
+    raw_msg = json.loads(raw_msg_str)
+
+    recs_first = parse_bybit_liquidation_message(raw_msg, ident, received_at=recv_t, raw_msg_str=raw_msg_str)
+    recs_replay = parse_bybit_liquidation_message(raw_msg, ident, received_at=recv_t, raw_msg_str=raw_msg_str)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        yr_dir = Path(tmp_dir) / "year=2026"
+        p_path, total_rows, _, _ = merge_and_write_liquidation_parquet(yr_dir, "BTCUSDT", 2026, recs_first)
+        assert total_rows == 1
+
+        # Re-merge identical replay
+        p_path2, total_rows2, _, _ = merge_and_write_liquidation_parquet(yr_dir, "BTCUSDT", 2026, recs_replay)
+        assert total_rows2 == 1, "Duplicate re-delivery must deduplicate to 1 row"
+
+
+def test_bybit_liquidation_snapshot_does_not_replace_accumulated_data():
+    """Proves that subsequent snapshot messages append/accumulate rather than replace old data."""
+    ident = funding_identity("BTCUSDT")
+    t1 = datetime(2026, 8, 11, 10, 0, 0, tzinfo=UTC)
+    t2 = datetime(2026, 8, 11, 10, 1, 0, tzinfo=UTC)
+
+    msg1 = {
+        "topic": "allLiquidation.BTCUSDT",
+        "type": "snapshot",
+        "ts": 1786434825000,
+        "data": [{"T": 1786434825000, "s": "BTCUSDT", "S": "Buy", "v": "1.0", "p": "60000.00"}],
+    }
+    msg2 = {
+        "topic": "allLiquidation.BTCUSDT",
+        "type": "snapshot",
+        "ts": 1786434826000,
+        "data": [{"T": 1786434826000, "s": "BTCUSDT", "S": "Sell", "v": "2.0", "p": "61000.00"}],
+    }
+
+    recs1 = parse_bybit_liquidation_message(msg1, ident, received_at=t1)
+    recs2 = parse_bybit_liquidation_message(msg2, ident, received_at=t2)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        yr_dir = Path(tmp_dir) / "year=2026"
+        _, rows1, _, _ = merge_and_write_liquidation_parquet(yr_dir, "BTCUSDT", 2026, recs1)
+        assert rows1 == 1
+
+        p2, rows2, _, _ = merge_and_write_liquidation_parquet(yr_dir, "BTCUSDT", 2026, recs2)
+        assert rows2 == 2, "Second snapshot message must accumulate with first snapshot"
+        tbl = pq.ParquetFile(p2).read()
+        assert len(tbl) == 2
 
 
 def test_bybit_liquidation_realtime_knowledge_time_must_equal_received_at():
@@ -276,6 +353,7 @@ def test_persist_bybit_liquidation_batch_end_to_end_and_idempotent():
         # 1. First Ingestion
         res1 = persist_bybit_liquidation_batch(raw_messages, "BTCUSDT", root, received_at=recv_t)
         assert res1["status"] == "PASS"
+        assert res1["event_observation_status"] == "REAL_EVENT_OBSERVED"
         assert res1["records_count"] == 2
         assert res1["total_accumulated_rows"] == 2
 
@@ -304,17 +382,32 @@ def test_persist_bybit_liquidation_batch_end_to_end_and_idempotent():
         chk = json.loads(chk_file.read_text(encoding="utf-8"))
         assert chk["total_records"] == 2
 
-        # 2. Re-running identical batch must be idempotent (no duplicate manifest lines, no fake generation files)
+        # 2. Re-running identical batch must be idempotent (no duplicate manifest lines, no duplicate parquet generations)
         res2 = persist_bybit_liquidation_batch(raw_messages, "BTCUSDT", root, received_at=recv_t)
         assert res2["status"] == "PASS"
+
+        manifest_lines_after = manifest_file.read_text(encoding="utf-8").strip().splitlines()
+        assert len(manifest_lines_after) == 1, "Idempotent rerun must not duplicate manifest entries"
 
         parquet_files_after = list((root / "normalized" / "liquidations" / "v1" / "exchange=bybit" / "market_type=perpetual" / "symbol=BTCUSDT").rglob("*.parquet"))
         assert len(parquet_files_after) == 1, "Idempotent rerun must not spawn duplicate generation files"
 
 
+def test_empty_liquidation_batch_does_not_mutate_storage_or_manifest():
+    """Proves that 0-event intervals do not write empty files or false manifest rows."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        root = Path(tmp_dir)
+        res = persist_bybit_liquidation_batch([], "BTCUSDT", root)
+        assert res["status"] == "PASS"
+        assert res["event_observation_status"] == "NO_EVENT_OBSERVED_WITHIN_WINDOW"
+        assert res["records_count"] == 0
+        assert not (root / "control" / "manifests" / "bybit_linear_liquidations.jsonl").exists()
+
+
 @pytest.mark.anyio
 async def test_collect_bybit_liquidations_live_mocked(monkeypatch):
     """Proves the asynchronous Bybit real-time liquidation collector lifecycle with mocked WebSocket."""
+    import asyncio
     from unittest.mock import AsyncMock
 
     from crypto_quant.ingestion.bybit.liquidations import collect_bybit_liquidations_live
@@ -339,8 +432,6 @@ async def test_collect_bybit_liquidations_live_mocked(monkeypatch):
             "data": [{"T": 1786434825900, "s": "BTCUSDT", "S": "Sell", "v": "2.0", "p": "62100.00"}],
         })
 
-        import asyncio
-
         recv_queue = [ack_str, msg1_str, msg2_str]
 
         async def mock_recv():
@@ -359,6 +450,7 @@ async def test_collect_bybit_liquidations_live_mocked(monkeypatch):
                 pass
 
         import websockets
+
         monkeypatch.setattr(websockets, "connect", lambda *args, **kwargs: MockWSContext())
 
         res = await collect_bybit_liquidations_live(
@@ -369,6 +461,8 @@ async def test_collect_bybit_liquidations_live_mocked(monkeypatch):
         )
 
         assert res["status"] == "PASS"
+        assert res["transport_status"] == "PASS"
+        assert res["event_observation_status"] == "REAL_EVENT_OBSERVED"
         assert res["total_messages_received"] == 2
         assert res["total_records_persisted"] == 2
 
@@ -377,4 +471,3 @@ async def test_collect_bybit_liquidations_live_mocked(monkeypatch):
         assert len(parquet_files) == 1
         tbl = pq.ParquetFile(parquet_files[0]).read()
         assert len(tbl) == 2
-

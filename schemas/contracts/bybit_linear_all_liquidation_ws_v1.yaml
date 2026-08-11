@@ -1,0 +1,29 @@
+contract_id: bybit.linear.ws.all-liquidation.v1
+source_dataset_id: bybit.linear.liquidations.ws
+exchange: bybit
+market_type: perpetual
+contract_type: linear_perpetual
+source_kind: websocket
+official_documentation_url: https://bybit-exchange.github.io/docs/v5/websocket/public/all-liquidation
+verified_at: "2026-08-11T00:00:00Z"
+schema_version: 1.0.0
+stream_rules:
+  endpoint: wss://stream.bybit.com/v5/public/linear
+  topic: allLiquidation.{symbol}
+  push_frequency: 500ms
+  message_type: snapshot
+  completeness_class: UNTHROTTLED_EVENT_STREAM
+fields:
+  - {source_field: topic, semantic_meaning: subscription_topic, source_unit: string, nullable: false, canonical_field: routing, transformation: exact_match, normalized_unit: symbol}
+  - {source_field: type, semantic_meaning: websocket_message_batch_label, source_unit: string, nullable: false, canonical_field: message_type, transformation: preserve, normalized_unit: string}
+  - {source_field: ts, semantic_meaning: system_generation_timestamp_ms, source_unit: epoch_ms, nullable: false, canonical_field: exchange_timestamp, transformation: epoch_ms_to_utc, normalized_unit: UTC}
+  - {source_field: "data[].T", semantic_meaning: liquidation_event_updated_timestamp_ms, source_unit: epoch_ms, nullable: false, canonical_field: event_time, transformation: epoch_ms_to_utc, normalized_unit: UTC}
+  - {source_field: "data[].s", semantic_meaning: symbol_name, source_unit: string, nullable: false, canonical_field: symbol, transformation: exact_match, normalized_unit: symbol}
+  - {source_field: "data[].S", semantic_meaning: liquidated_position_side_buy_long_sell_short, source_unit: string, nullable: false, canonical_field: position_side_liquidated, transformation: map_bybit_position_side, normalized_unit: enum_LONG_SHORT}
+  - {source_field: "data[].v", semantic_meaning: executed_liquidation_volume_base_coin_contracts, source_unit: base_coin, nullable: false, canonical_field: source_quantity, transformation: string_to_decimal_raw, normalized_unit: base_coin}
+  - {source_field: "data[].p", semantic_meaning: bankruptcy_price, source_unit: quote_asset, nullable: false, canonical_field: source_price, transformation: string_to_decimal_raw, normalized_unit: quote_asset}
+known_limitations:
+  - "Bybit price p represents the bankruptcy price of the liquidated position, not the execution fill price."
+  - "Historical bulk liquidation archive is unavailable from venue; local history starts from first captured realtime event."
+  - "Legacy WebSocket topic liquidation.{symbol} is deprecated and returns handler not found error."
+  - "Message label snapshot is a batch envelope metadata tag and does not imply state replacement."
