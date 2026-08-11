@@ -19,7 +19,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -315,6 +315,91 @@ def fetch_binance_open_interest_history(
 
 
 
+def _ensure_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
+def merge_and_write_oi_parquet(
+    target_parquet: Path,
+    new_records: list[CanonicalOpenInterestRecord],
+) -> int:
+    """Merges new records with existing Parquet partition by natural key, sorting strictly ascending.
+
+    Preserves historical observations outside the current API rolling window.
+    Returns total row count in the resulting Parquet partition.
+    """
+    records_by_key: dict[tuple[str, str, str, datetime], CanonicalOpenInterestRecord] = {}
+
+    if target_parquet.exists():
+        existing_table = pq.ParquetFile(target_parquet).read()
+        for i in range(len(existing_table)):
+            obs_t = _ensure_utc(existing_table["observation_time"][i].as_py())
+            ev_t = _ensure_utc(existing_table["event_time"][i].as_py())
+            kt_raw = existing_table["knowledge_time"][i].as_py() if "knowledge_time" in existing_table.schema.names else None
+            kt_t = _ensure_utc(kt_raw) if kt_raw is not None else None
+
+            rec = CanonicalOpenInterestRecord(
+                exchange=existing_table["exchange"][i].as_py(),
+                instrument_id=existing_table["instrument_id"][i].as_py(),
+                symbol=existing_table["symbol"][i].as_py(),
+                market_type=existing_table["market_type"][i].as_py(),
+                contract_type=existing_table["contract_type"][i].as_py(),
+                venue_product_type=existing_table["venue_product_type"][i].as_py(),
+                period=existing_table["period"][i].as_py(),
+                observation_time=obs_t,
+                oi_base=existing_table["oi_base"][i].as_py(),
+                oi_notional=existing_table["oi_notional"][i].as_py() if "oi_notional" in existing_table.schema.names else None,
+                single_side_oi_base=existing_table["single_side_oi_base"][i].as_py() if "single_side_oi_base" in existing_table.schema.names else None,
+                oi_semantic=existing_table["oi_semantic"][i].as_py(),
+                event_time=ev_t,
+                knowledge_time=kt_t,
+                source=existing_table["source"][i].as_py(),
+                source_contract_version=existing_table["source_contract_version"][i].as_py(),
+                schema_version=existing_table["schema_version"][i].as_py(),
+                collector_version=existing_table["collector_version"][i].as_py(),
+                normalization_version=existing_table["normalization_version"][i].as_py(),
+            )
+            key = (rec.exchange, rec.instrument_id, rec.period, rec.observation_time)
+            records_by_key[key] = rec
+
+    for rec in new_records:
+        rec_utc = CanonicalOpenInterestRecord(
+            exchange=rec.exchange,
+            instrument_id=rec.instrument_id,
+            symbol=rec.symbol,
+            market_type=rec.market_type,
+            contract_type=rec.contract_type,
+            venue_product_type=rec.venue_product_type,
+            period=rec.period,
+            observation_time=_ensure_utc(rec.observation_time),
+            oi_base=rec.oi_base,
+            oi_notional=rec.oi_notional,
+            single_side_oi_base=rec.single_side_oi_base,
+            oi_semantic=rec.oi_semantic,
+            event_time=_ensure_utc(rec.event_time),
+            knowledge_time=_ensure_utc(rec.knowledge_time) if rec.knowledge_time is not None else None,
+            source=rec.source,
+            source_contract_version=rec.source_contract_version,
+            schema_version=rec.schema_version,
+            collector_version=rec.collector_version,
+            normalization_version=rec.normalization_version,
+        )
+        key = (rec_utc.exchange, rec_utc.instrument_id, rec_utc.period, rec_utc.observation_time)
+        records_by_key[key] = rec_utc
+
+    sorted_records = sorted(records_by_key.values(), key=lambda r: r.observation_time)
+    merged_table = records_to_pyarrow_oi_table(sorted_records)
+    partial_parquet = target_parquet.with_suffix(".parquet.partial")
+    target_parquet.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(merged_table, partial_parquet, compression="zstd", flavor="spark")
+    os.replace(partial_parquet, target_parquet)
+    return len(sorted_records)
+
+
 def ingest_binance_open_interest(
     symbol: str,
     root: Path,
@@ -374,7 +459,7 @@ def ingest_binance_open_interest(
             f.write(json.dumps(item) + "\n")
     raw_hash = sha256_text(raw_file.read_text(encoding="utf-8"))
 
-    # 6. Group by Year and Persist Canonical Parquet
+    # 6. Group by Year and Persist Canonical Parquet with Safe Accumulation
     norm_base = (
         root
         / "normalized"
@@ -393,15 +478,13 @@ def ingest_binance_open_interest(
         records_by_year.setdefault(yr, []).append(r)
 
     created_parquet_files: list[Path] = []
+    total_dataset_rows = 0
     for yr, yr_records in sorted(records_by_year.items()):
-        yr_table = records_to_pyarrow_oi_table(yr_records)
         yr_dir = norm_base / f"year={yr}"
         yr_dir.mkdir(parents=True, exist_ok=True)
         target_parquet = yr_dir / f"part-{symbol.lower()}_{period}_{yr}.parquet"
-        partial_parquet = target_parquet.with_suffix(".parquet.partial")
-
-        pq.write_table(yr_table, partial_parquet, compression="zstd", flavor="spark")
-        os.replace(partial_parquet, target_parquet)
+        partition_rows = merge_and_write_oi_parquet(target_parquet, yr_records)
+        total_dataset_rows += partition_rows
         created_parquet_files.append(target_parquet)
 
     # 7. Record Manifest
@@ -424,6 +507,7 @@ def ingest_binance_open_interest(
         "observed_coverage_start": normalized_records[0].observation_time.isoformat(),
         "observed_coverage_end": normalized_records[-1].observation_time.isoformat(),
         "row_count": len(normalized_records),
+        "total_accumulated_rows": total_dataset_rows,
         "raw_object_ref": str(raw_file.relative_to(root)),
         "raw_sha256": raw_hash,
         "created_parquets": [str(p.relative_to(root)) for p in created_parquet_files],
@@ -449,7 +533,8 @@ def ingest_binance_open_interest(
         "last_observation_time_iso": normalized_records[-1].observation_time.isoformat(),
         "observed_source_coverage_start": normalized_records[0].observation_time.isoformat(),
         "observed_source_coverage_end": normalized_records[-1].observation_time.isoformat(),
-        "total_records": len(normalized_records),
+        "batch_records": len(normalized_records),
+        "total_records": total_dataset_rows,
         "updated_at": retrieved_iso,
     }
     chk_file.write_text(json.dumps(chk_payload, indent=2), encoding="utf-8")
@@ -459,6 +544,7 @@ def ingest_binance_open_interest(
         "period": period,
         "status": "PASS",
         "records_count": len(normalized_records),
+        "total_accumulated_rows": total_dataset_rows,
         "observed_source_coverage_start": normalized_records[0].observation_time.isoformat(),
         "observed_source_coverage_end": normalized_records[-1].observation_time.isoformat(),
         "normalized_dataset_coverage_start": normalized_records[0].observation_time.isoformat(),

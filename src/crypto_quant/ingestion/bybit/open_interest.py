@@ -17,14 +17,12 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import httpx
-import pyarrow.parquet as pq
 
 from ...hashing import sha256_text
 from ...identity import InstrumentIdentity
@@ -33,7 +31,6 @@ from ...time import parse_epoch, utc_now
 from ..binance.funding import funding_identity
 from ..binance.open_interest import (
     CanonicalOpenInterestRecord,
-    records_to_pyarrow_oi_table,
     validate_open_interest_records_dq,
 )
 
@@ -108,9 +105,13 @@ def fetch_bybit_open_interest_history(
     end_time_ms: int | None = None,
     client: httpx.Client | None = None,
     limit: int = 200,
-    max_pages: int = 1000,
-) -> list[dict[str, Any]]:
-    """Traverses Bybit GET /v5/market/open-interest via cursor until exhausted."""
+    max_pages: int | None = 1000,
+) -> tuple[list[dict[str, Any]], str]:
+    """Traverses Bybit GET /v5/market/open-interest via cursor until exhausted or max_pages reached.
+
+    Returns: (records, termination_reason)
+    termination_reason is one of: "CURSOR_EMPTY", "SOURCE_EMPTY", "PAGE_LIMIT_REACHED".
+    """
     api_interval = PERIOD_TO_INTERVAL_MAP.get(period)
     if api_interval is None:
         raise ValueError(f"Invalid period '{period}'. Supported periods: {list(PERIOD_TO_INTERVAL_MAP.keys())}")
@@ -125,9 +126,14 @@ def fetch_bybit_open_interest_history(
     seen_timestamps: set[int] = set()
     cursor: str | None = None
     page = 0
+    termination_reason = "CURSOR_EMPTY"
 
     try:
-        while page < max_pages:
+        while True:
+            if max_pages is not None and page >= max_pages:
+                termination_reason = "PAGE_LIMIT_REACHED"
+                break
+
             page += 1
             params: dict[str, Any] = {
                 "category": "linear",
@@ -147,6 +153,7 @@ def fetch_bybit_open_interest_history(
             result_obj = data.get("result", {})
             items: list[dict[str, Any]] = result_obj.get("list", [])
             if not items:
+                termination_reason = "SOURCE_EMPTY"
                 break
 
             new_in_batch = 0
@@ -163,6 +170,7 @@ def fetch_bybit_open_interest_history(
 
             next_cursor = result_obj.get("nextPageCursor")
             if not next_cursor or new_in_batch == 0 or len(items) < limit:
+                termination_reason = "CURSOR_EMPTY"
                 break
 
             cursor = next_cursor
@@ -170,7 +178,7 @@ def fetch_bybit_open_interest_history(
 
         # Guarantee strict ascending order
         all_raw_items.sort(key=lambda x: int(x["timestamp"]))
-        return all_raw_items
+        return all_raw_items, termination_reason
     finally:
         if should_close:
             client.close()
@@ -184,6 +192,7 @@ def ingest_bybit_open_interest(
     start_time_ms: int | None = None,
     end_time_ms: int | None = None,
     client: httpx.Client | None = None,
+    max_pages: int | None = 1000,
     min_disk_free_gb: float = 20.0,
 ) -> dict[str, Any]:
     """End-to-end Bybit Linear Open Interest ingestion, normalization, Parquet persistence, and manifest."""
@@ -195,8 +204,8 @@ def ingest_bybit_open_interest(
     retrieved_at = utc_now()
 
     # 1. Fetch raw history via cursor pagination
-    raw_items = fetch_bybit_open_interest_history(
-        symbol, period=period, start_time_ms=start_time_ms, end_time_ms=end_time_ms, client=client
+    raw_items, termination_reason = fetch_bybit_open_interest_history(
+        symbol, period=period, start_time_ms=start_time_ms, end_time_ms=end_time_ms, client=client, max_pages=max_pages
     )
     if not raw_items:
         return {
@@ -204,6 +213,8 @@ def ingest_bybit_open_interest(
             "period": period,
             "status": "EMPTY",
             "records_count": 0,
+            "coverage_status": "EMPTY",
+            "termination_reason": termination_reason,
             "observed_source_coverage_start": None,
             "observed_source_coverage_end": None,
         }
@@ -229,7 +240,7 @@ def ingest_bybit_open_interest(
             f.write(json.dumps(item) + "\n")
     raw_hash = sha256_text(raw_file.read_text(encoding="utf-8"))
 
-    # 5. Group by Year and Persist Canonical Parquet
+    # 5. Group by Year and Persist Canonical Parquet with Safe Accumulation
     norm_base = (
         root
         / "normalized"
@@ -248,16 +259,18 @@ def ingest_bybit_open_interest(
         records_by_year.setdefault(yr, []).append(r)
 
     created_parquet_files: list[Path] = []
+    from ..binance.open_interest import merge_and_write_oi_parquet
+
+    total_dataset_rows = 0
     for yr, yr_records in sorted(records_by_year.items()):
-        yr_table = records_to_pyarrow_oi_table(yr_records)
         yr_dir = norm_base / f"year={yr}"
         yr_dir.mkdir(parents=True, exist_ok=True)
         target_parquet = yr_dir / f"part-{symbol.lower()}_{period}_{yr}.parquet"
-        partial_parquet = target_parquet.with_suffix(".parquet.partial")
-
-        pq.write_table(yr_table, partial_parquet, compression="zstd", flavor="spark")
-        os.replace(partial_parquet, target_parquet)
+        partition_rows = merge_and_write_oi_parquet(target_parquet, yr_records)
+        total_dataset_rows += partition_rows
         created_parquet_files.append(target_parquet)
+
+    coverage_status = "COMPLETE" if termination_reason != "PAGE_LIMIT_REACHED" else "PARTIAL_TRUNCATED_BY_PAGE_LIMIT"
 
     # 6. Record Manifest
     manifest_dir = root / "control" / "manifests"
@@ -279,6 +292,9 @@ def ingest_bybit_open_interest(
         "observed_coverage_start": normalized_records[0].observation_time.isoformat(),
         "observed_coverage_end": normalized_records[-1].observation_time.isoformat(),
         "row_count": len(normalized_records),
+        "total_accumulated_rows": total_dataset_rows,
+        "coverage_status": coverage_status,
+        "termination_reason": termination_reason,
         "raw_object_ref": str(raw_file.relative_to(root)),
         "raw_sha256": raw_hash,
         "created_parquets": [str(p.relative_to(root)) for p in created_parquet_files],
@@ -304,7 +320,10 @@ def ingest_bybit_open_interest(
         "last_observation_time_iso": normalized_records[-1].observation_time.isoformat(),
         "observed_source_coverage_start": normalized_records[0].observation_time.isoformat(),
         "observed_source_coverage_end": normalized_records[-1].observation_time.isoformat(),
-        "total_records": len(normalized_records),
+        "batch_records": len(normalized_records),
+        "total_records": total_dataset_rows,
+        "coverage_status": coverage_status,
+        "termination_reason": termination_reason,
         "updated_at": retrieved_iso,
     }
     chk_file.write_text(json.dumps(chk_payload, indent=2), encoding="utf-8")
@@ -314,6 +333,9 @@ def ingest_bybit_open_interest(
         "period": period,
         "status": "PASS",
         "records_count": len(normalized_records),
+        "total_accumulated_rows": total_dataset_rows,
+        "coverage_status": coverage_status,
+        "termination_reason": termination_reason,
         "observed_source_coverage_start": normalized_records[0].observation_time.isoformat(),
         "observed_source_coverage_end": normalized_records[-1].observation_time.isoformat(),
         "normalized_dataset_coverage_start": normalized_records[0].observation_time.isoformat(),

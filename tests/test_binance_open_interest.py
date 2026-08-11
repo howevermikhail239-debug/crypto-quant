@@ -223,3 +223,82 @@ def test_binance_oi_rerun_bootstrap_idempotent_without_rmtree():
 def test_binance_oi_invalid_period_rejected():
     with pytest.raises(ValueError, match="Invalid period"):
         fetch_binance_open_interest_history("BTCUSDT", period="10m")
+
+
+def test_binance_rolling_window_accumulation_preserves_old_history_outside_window():
+    """Proves that local accumulated history is preserved when new rolling 30-day window arrives.
+
+    Scenario:
+    - Partition year=2026 initially contains historical observation T_old (e.g. 60 days ago, no longer in 30d API window).
+    - New ingestion returns only current rolling window (T_new_1, T_new_2).
+    - Merged partition must contain: T_old + T_new_1 + T_new_2, sorted ascending, 0 duplicate keys.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        root = Path(tmp_dir)
+        ident = funding_identity("BTCUSDT")
+
+        # 1. Initial State: Old observation T_old (60 days ago in 2026)
+        old_rec = parse_binance_open_interest_item(
+            {"symbol": "BTCUSDT", "sumOpenInterest": "50000", "sumOpenInterestValue": "3000000000", "timestamp": 1780000000000},
+            ident,
+            period="5m",
+        )
+        target_parquet = (
+            root
+            / "normalized"
+            / "open_interest"
+            / "v1"
+            / "exchange=binance"
+            / "market_type=perpetual"
+            / "symbol=BTCUSDT"
+            / "period=5m"
+            / f"year={old_rec.observation_time.year}"
+            / f"part-btcusdt_5m_{old_rec.observation_time.year}.parquet"
+        )
+        from crypto_quant.ingestion.binance.open_interest import merge_and_write_oi_parquet
+
+        merge_and_write_oi_parquet(target_parquet, [old_rec])
+        assert target_parquet.exists()
+
+        # 2. New Ingestion: returns only current window (timestamps > 1785000000000)
+        mock_client = MagicMock()
+        resp_curr = MagicMock()
+        resp_curr.status_code = 200
+        resp_curr.json.return_value = {"symbol": "BTCUSDT", "openInterest": "106617.807", "time": 1786429377185}
+
+        resp_hist = MagicMock()
+        resp_hist.status_code = 200
+        resp_hist.json.return_value = [
+            {"symbol": "BTCUSDT", "sumOpenInterest": "100000", "sumOpenInterestValue": "6000000000", "timestamp": 1786428000000},
+            {"symbol": "BTCUSDT", "sumOpenInterest": "101000", "sumOpenInterestValue": "6100000000", "timestamp": 1786428300000},
+        ]
+        mock_client.get.side_effect = [resp_curr, resp_hist]
+
+        res = ingest_binance_open_interest("BTCUSDT", root, period="5m", client=mock_client)
+        assert res["status"] == "PASS"
+        assert res["records_count"] == 2  # batch count
+        assert res["total_accumulated_rows"] == 3  # T_old + 2 new records
+
+        # 3. Verify on disk parquet
+        import pyarrow.parquet as pq
+
+        tbl = pq.ParquetFile(target_parquet).read()
+        assert len(tbl) == 3
+        timestamps = tbl["observation_time"].to_pylist()
+        assert timestamps[0] < timestamps[1] < timestamps[2]
+        assert tbl["oi_base"][0].as_py() == "50000"
+        assert tbl["oi_base"][1].as_py() == "100000"
+        assert tbl["oi_base"][2].as_py() == "101000"
+
+
+def test_binance_historical_knowledge_time_must_be_null():
+    """Proves that historical bootstrap records have knowledge_time=None to prevent look-ahead bias."""
+    ident = funding_identity("BTCUSDT")
+    raw = {
+        "symbol": "BTCUSDT",
+        "sumOpenInterest": "106568.86800000",
+        "sumOpenInterestValue": "6816677641.62000000",
+        "timestamp": 1786428000000,
+    }
+    rec = parse_binance_open_interest_item(raw, ident, period="5m")
+    assert rec.knowledge_time is None, "Historical knowledge_time must be null / UNKNOWN"
