@@ -1,6 +1,6 @@
 # PHASE 1D.3B — Bybit Linear ETHUSDT Liquidation Parity
 
-**Status:** IMPLEMENTED / READY FOR INDEPENDENT ACCEPTANCE  
+**Status:** FINAL DONE / ACCEPTED
 **Verified:** 2026-08-11  
 **Scope:** existing Bybit `allLiquidation.{symbol}` adapter, ETHUSDT parity only
 
@@ -61,3 +61,16 @@ A separate read-only keepalive probe received a matching WebSocket `PONG` after 
 - Cross-envelope economic-event dedup remains unguaranteed because the source provides no native event ID.
 - This slice does not establish long-window delivery completeness, disconnect-gap behavior, or reconciliation; those remain PHASE 1D.3F.
 - No liquidation features, signals, strategy rules, Binance collector, or execution logic were added.
+
+## Independent acceptance audit
+
+The independent acceptance audit on 2026-08-11 confirmed the original identity defect as fixed and added narrow regression evidence without changing source, normalization, deduplication, or storage semantics:
+
+- the canonical Binance/Bybit x BTCUSDT/ETHUSDT perpetual identity matrix contains four distinct instrument IDs with the expected exchange, symbol, market, contract, base, quote, settle, quantity, and notional dimensions;
+- a Bybit BTCUSDT Spot identity is distinct from the corresponding perpetual identity;
+- mixed-symbol multi-event envelopes fail before any raw, normalized, manifest, or checkpoint write;
+- persisting ETH in the same root does not change the previously persisted BTC Parquet bytes or hash;
+- normalized Parquet and manifest instrument IDs match the requested canonical identity;
+- manifests distinguish raw WebSocket envelope count (`raw_message_count`) from normalized economic-event count (`event_count`), while retaining `row_count` as the compatibility alias.
+
+Validation at acceptance: focused liquidation tests `19 passed`; full suite `215 passed`; Ruff, config-check, health, dependency lock check, and Git whitespace validation passed.

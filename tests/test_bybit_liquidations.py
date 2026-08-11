@@ -1,5 +1,6 @@
 """Tests for Bybit Linear Liquidations Normalization, Storage and Invariants (Phase 1D.3A)."""
 
+import hashlib
 import json
 import tempfile
 from datetime import UTC, datetime
@@ -11,6 +12,7 @@ import pytest
 import yaml
 
 from crypto_quant.contracts import DataContract
+from crypto_quant.ingestion.binance.funding import funding_identity as binance_funding_identity
 from crypto_quant.ingestion.bybit.funding import funding_identity
 from crypto_quant.ingestion.bybit.liquidations import (
     CONTRACT_ID,
@@ -22,6 +24,7 @@ from crypto_quant.ingestion.bybit.liquidations import (
     persist_bybit_liquidation_batch,
     validate_liquidation_records_dq,
 )
+from crypto_quant.ingestion.bybit.trades import bybit_spot_identity
 from crypto_quant.time import parse_epoch
 
 
@@ -155,6 +158,39 @@ def test_bybit_liquidation_eth_side_decimal_and_time_semantics():
     assert all(r.source_quantity_unit == "base_coin" for r in records)
 
 
+def test_perpetual_identity_matrix_is_exchange_and_symbol_specific():
+    """The four in-scope perpetuals retain all canonical identity dimensions."""
+    identities = {
+        ("binance", "BTCUSDT"): binance_funding_identity("BTCUSDT"),
+        ("binance", "ETHUSDT"): binance_funding_identity("ETHUSDT"),
+        ("bybit", "BTCUSDT"): funding_identity("BTCUSDT"),
+        ("bybit", "ETHUSDT"): funding_identity("ETHUSDT"),
+    }
+
+    assert len({ident.instrument_id for ident in identities.values()}) == 4
+    for (exchange, symbol), ident in identities.items():
+        base = symbol.removesuffix("USDT")
+        assert ident.exchange == exchange
+        assert ident.venue_environment == "production"
+        assert ident.native_symbol == symbol
+        assert ident.market_type == "perpetual"
+        assert ident.contract_type == "linear_perpetual"
+        assert ident.base_asset == base
+        assert ident.quote_asset == "USDT"
+        assert ident.settle_asset == "USDT"
+        assert ident.quantity_unit == base
+        assert ident.notional_unit == "USDT"
+        assert ident.expiry is None
+
+    # A real existing Bybit Spot identity differs only in product semantics that
+    # must participate in canonical identity; no Spot collector is introduced.
+    bybit_btc_spot = bybit_spot_identity("BTCUSDT")
+    bybit_btc_perpetual = identities[("bybit", "BTCUSDT")]
+    assert bybit_btc_spot.market_type == "spot"
+    assert bybit_btc_spot.contract_type == "spot"
+    assert bybit_btc_spot.instrument_id != bybit_btc_perpetual.instrument_id
+
+
 def test_bybit_liquidation_eth_multiplicity_replay_and_lineage(tmp_path: Path):
     """ETH exact-wire replay deduplicates while identical batch events retain multiplicity and lineage."""
     received_at = datetime(2026, 8, 11, 10, 0, 0, tzinfo=UTC)
@@ -188,6 +224,9 @@ def test_bybit_liquidation_eth_multiplicity_replay_and_lineage(tmp_path: Path):
     manifest_rows = [json.loads(line) for line in manifest_file.read_text(encoding="utf-8").splitlines()]
     assert len(manifest_rows) == 1
     assert manifest_rows[0]["symbol"] == "ETHUSDT"
+    assert manifest_rows[0]["raw_message_count"] == 1
+    assert manifest_rows[0]["event_count"] == 2
+    assert manifest_rows[0]["row_count"] == 2
     assert "symbol=ETHUSDT" in manifest_rows[0]["created_parquets"][0]
     assert "liquidations/ETHUSDT" in manifest_rows[0]["raw_object_ref"]
 
@@ -202,6 +241,12 @@ def test_bybit_liquidation_cross_symbol_same_event_never_collides(tmp_path: Path
     btc_result = persist_bybit_liquidation_batch([btc_message], "BTCUSDT", tmp_path, received_at=received_at)
     btc_checkpoint = tmp_path / "control" / "checkpoints" / "bybit_linear_liquidations_BTCUSDT.json"
     btc_checkpoint_before_eth = btc_checkpoint.read_bytes()
+    btc_parquet_before_eth = list(
+        (tmp_path / "normalized" / "liquidations" / "v1" / "exchange=bybit" / "market_type=perpetual" / "symbol=BTCUSDT").rglob("*.parquet")
+    )
+    assert len(btc_parquet_before_eth) == 1
+    btc_parquet_bytes_before_eth = btc_parquet_before_eth[0].read_bytes()
+    btc_parquet_hash_before_eth = hashlib.sha256(btc_parquet_bytes_before_eth).hexdigest()
     eth_result = persist_bybit_liquidation_batch([eth_message], "ETHUSDT", tmp_path, received_at=received_at)
 
     manifest_file = tmp_path / "control" / "manifests" / "bybit_linear_liquidations.jsonl"
@@ -227,8 +272,16 @@ def test_bybit_liquidation_cross_symbol_same_event_never_collides(tmp_path: Path
     assert len(btc_parquet) == len(eth_parquet) == 1
     assert pq.ParquetFile(btc_parquet[0]).metadata.num_rows == 1
     assert pq.ParquetFile(eth_parquet[0]).metadata.num_rows == 1
+    assert btc_parquet[0].read_bytes() == btc_parquet_bytes_before_eth
+    assert hashlib.sha256(btc_parquet[0].read_bytes()).hexdigest() == btc_parquet_hash_before_eth
     assert set(manifest_by_symbol) == {"BTCUSDT", "ETHUSDT"}
     assert manifest_by_symbol["BTCUSDT"]["instrument_id"] != manifest_by_symbol["ETHUSDT"]["instrument_id"]
+    assert manifest_by_symbol["BTCUSDT"]["instrument_id"] == funding_identity("BTCUSDT").instrument_id
+    assert manifest_by_symbol["ETHUSDT"]["instrument_id"] == funding_identity("ETHUSDT").instrument_id
+    assert manifest_by_symbol["BTCUSDT"]["raw_message_count"] == manifest_by_symbol["ETHUSDT"]["raw_message_count"] == 1
+    assert manifest_by_symbol["BTCUSDT"]["event_count"] == manifest_by_symbol["ETHUSDT"]["event_count"] == 1
+    assert pq.ParquetFile(btc_parquet[0]).read()["instrument_id"].to_pylist() == [manifest_by_symbol["BTCUSDT"]["instrument_id"]]
+    assert pq.ParquetFile(eth_parquet[0]).read()["instrument_id"].to_pylist() == [manifest_by_symbol["ETHUSDT"]["instrument_id"]]
     assert manifest_by_symbol["BTCUSDT"]["raw_object_ref"] != manifest_by_symbol["ETHUSDT"]["raw_object_ref"]
     assert manifest_by_symbol["BTCUSDT"]["created_parquets"] != manifest_by_symbol["ETHUSDT"]["created_parquets"]
 
@@ -260,11 +313,31 @@ def test_bybit_liquidation_eth_wrong_routing_fails_before_storage_writes(tmp_pat
         "ts": 1786434825553,
         "data": [{"T": 1786434825100, "s": "BTCUSDT", "S": "Buy", "v": "1", "p": "3000"}],
     }
+    mixed_eth_batch = {
+        "topic": "allLiquidation.ETHUSDT",
+        "ts": 1786434825553,
+        "data": [
+            {"T": 1786434825100, "s": "ETHUSDT", "S": "Buy", "v": "1", "p": "3000"},
+            {"T": 1786434825200, "s": "BTCUSDT", "S": "Sell", "v": "1", "p": "60000"},
+        ],
+    }
+    mixed_btc_batch = {
+        "topic": "allLiquidation.BTCUSDT",
+        "ts": 1786434825553,
+        "data": [
+            {"T": 1786434825100, "s": "BTCUSDT", "S": "Buy", "v": "1", "p": "60000"},
+            {"T": 1786434825200, "s": "ETHUSDT", "S": "Sell", "v": "1", "p": "3000"},
+        ],
+    }
 
     with pytest.raises(ValueError, match="Topic mismatch"):
         persist_bybit_liquidation_batch([wrong_topic], "ETHUSDT", tmp_path)
     with pytest.raises(ValueError, match="Symbol mismatch"):
         persist_bybit_liquidation_batch([wrong_payload_symbol], "ETHUSDT", tmp_path)
+    with pytest.raises(ValueError, match="Symbol mismatch"):
+        persist_bybit_liquidation_batch([mixed_eth_batch], "ETHUSDT", tmp_path)
+    with pytest.raises(ValueError, match="Symbol mismatch"):
+        persist_bybit_liquidation_batch([mixed_btc_batch], "BTCUSDT", tmp_path)
 
     assert not (tmp_path / "raw").exists()
     assert not (tmp_path / "normalized").exists()
@@ -544,6 +617,8 @@ def test_persist_bybit_liquidation_batch_end_to_end_and_idempotent():
         mdata = json.loads(manifest_lines[0])
         assert mdata["exchange"] == "bybit"
         assert mdata["symbol"] == "BTCUSDT"
+        assert mdata["raw_message_count"] == 1
+        assert mdata["event_count"] == 2
         assert mdata["row_count"] == 2
         assert mdata["source_claimed_completeness"] == "ALL_LIQUIDATIONS"
         assert mdata["delivery_semantics"] == "BATCHED_500MS_PUSH"

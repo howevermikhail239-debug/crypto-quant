@@ -714,6 +714,11 @@ def persist_bybit_liquidation_batch(
         "dataset_class": "liquidations",
         "observed_coverage_start": sorted_records[0].event_time.isoformat(),
         "observed_coverage_end": sorted_records[-1].event_time.isoformat(),
+        # One wire envelope can contain multiple liquidation events.  Keep both
+        # counts explicit so manifest consumers do not mistake envelope count
+        # for economic-event count; row_count remains the compatibility alias.
+        "raw_message_count": len(unpacked_raw_msgs),
+        "event_count": len(sorted_records),
         "row_count": len(sorted_records),
         "total_accumulated_rows": total_dataset_rows,
         "source_claimed_completeness": "ALL_LIQUIDATIONS",
