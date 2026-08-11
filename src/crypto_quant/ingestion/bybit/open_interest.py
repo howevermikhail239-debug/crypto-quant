@@ -15,8 +15,11 @@ Enforces:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
+import tempfile
 import time
 from decimal import Decimal
 from pathlib import Path
@@ -24,7 +27,6 @@ from typing import Any
 
 import httpx
 
-from ...hashing import sha256_text
 from ...identity import InstrumentIdentity
 from ...paths import disk_free_bytes
 from ...time import parse_epoch, utc_now
@@ -229,18 +231,24 @@ def ingest_bybit_open_interest(
     if dq_issues:
         raise ValueError(f"Bybit Open Interest DQ validation failed: {dq_issues[:5]}")
 
-    # 4. Persist raw JSONL
+    # 4. Persist raw JSONL with content hash (immutable)
     min_ts_iso = normalized_records[0].observation_time.strftime("%Y%m%dT%H%M%SZ")
     max_ts_iso = normalized_records[-1].observation_time.strftime("%Y%m%dT%H%M%SZ")
+    raw_bytes = ("\n".join(json.dumps(item) for item in raw_items) + "\n").encode("utf-8")
+    raw_hash = hashlib.sha256(raw_bytes).hexdigest()
+
     raw_dir = root / "raw" / "bybit" / "perpetual" / "open_interest" / symbol / period
     raw_dir.mkdir(parents=True, exist_ok=True)
-    raw_file = raw_dir / f"oi_{min_ts_iso}_{max_ts_iso}.jsonl"
-    with raw_file.open("w", encoding="utf-8") as f:
-        for item in raw_items:
-            f.write(json.dumps(item) + "\n")
-    raw_hash = sha256_text(raw_file.read_text(encoding="utf-8"))
+    raw_file = raw_dir / f"oi_{min_ts_iso}_{max_ts_iso}_{raw_hash[:8]}.jsonl"
+    if not raw_file.exists():
+        with tempfile.NamedTemporaryFile("wb", dir=raw_dir, delete=False, suffix=".partial") as tmp:
+            tmp.write(raw_bytes)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            temp_path = Path(tmp.name)
+        os.replace(temp_path, raw_file)
 
-    # 5. Group by Year and Persist Canonical Parquet with Safe Accumulation
+    # 5. Group by Year and Persist Canonical Parquet with Immutable Generations
     norm_base = (
         root
         / "normalized"
@@ -259,20 +267,26 @@ def ingest_bybit_open_interest(
         records_by_year.setdefault(yr, []).append(r)
 
     created_parquet_files: list[Path] = []
+    parquet_hashes: list[str] = []
     from ..binance.open_interest import merge_and_write_oi_parquet
 
     total_dataset_rows = 0
     for yr, yr_records in sorted(records_by_year.items()):
         yr_dir = norm_base / f"year={yr}"
-        yr_dir.mkdir(parents=True, exist_ok=True)
-        target_parquet = yr_dir / f"part-{symbol.lower()}_{period}_{yr}.parquet"
-        partition_rows = merge_and_write_oi_parquet(target_parquet, yr_records)
+        target_parquet, partition_rows, p_sha, _ = merge_and_write_oi_parquet(
+            yr_dir, symbol, period, yr, yr_records
+        )
         total_dataset_rows += partition_rows
         created_parquet_files.append(target_parquet)
+        parquet_hashes.append(p_sha)
 
-    coverage_status = "COMPLETE" if termination_reason != "PAGE_LIMIT_REACHED" else "PARTIAL_TRUNCATED_BY_PAGE_LIMIT"
+    coverage_status = (
+        "COMPLETE"
+        if termination_reason != "PAGE_LIMIT_REACHED"
+        else "PARTIAL_TRUNCATED_BY_PAGE_LIMIT"
+    )
 
-    # 6. Record Manifest
+    # 6. Record Manifest (Idempotent Append)
     manifest_dir = root / "control" / "manifests"
     manifest_dir.mkdir(parents=True, exist_ok=True)
     manifest_file = manifest_dir / "bybit_linear_open_interest.jsonl"
@@ -282,6 +296,7 @@ def ingest_bybit_open_interest(
         "action": "NORMALIZED",
         "exchange": "bybit",
         "market_type": "perpetual",
+        "contract_type": "linear_perpetual",
         "venue_product_type": "linear",
         "symbol": symbol,
         "instrument_id": ident.instrument_id,
@@ -295,19 +310,29 @@ def ingest_bybit_open_interest(
         "total_accumulated_rows": total_dataset_rows,
         "coverage_status": coverage_status,
         "termination_reason": termination_reason,
-        "raw_object_ref": str(raw_file.relative_to(root)),
+        "raw_object_ref": str(raw_file.relative_to(root)).replace("\\", "/"),
         "raw_sha256": raw_hash,
-        "created_parquets": [str(p.relative_to(root)) for p in created_parquet_files],
+        "raw_bytes": len(raw_bytes),
+        "created_parquets": [str(p.relative_to(root)).replace("\\", "/") for p in created_parquet_files],
+        "parquet_sha256": parquet_hashes,
+        "parquet_bytes": sum(p.stat().st_size for p in created_parquet_files),
         "source_dataset_id": DATASET_ID,
         "source_contract_version": CONTRACT_ID,
         "schema_version": SCHEMA_VERSION,
         "collector_version": COLLECTOR_VERSION,
         "normalization_version": NORMALIZATION_VERSION,
+        "known_limitations": [
+            "historical knowledge_time unknown; retrieval time is not market availability"
+        ],
         "retrieved_at": retrieved_iso,
         "processed_at": retrieved_iso,
     }
-    with manifest_file.open("a", encoding="utf-8") as mf:
-        mf.write(json.dumps(manifest_record) + "\n")
+
+    # Only append to manifest if this exact generation isn't already logged
+    existing_manifest_content = manifest_file.read_text(encoding="utf-8") if manifest_file.exists() else ""
+    if raw_hash not in existing_manifest_content or any(h not in existing_manifest_content for h in parquet_hashes):
+        with manifest_file.open("a", encoding="utf-8") as mf:
+            mf.write(json.dumps(manifest_record) + "\n")
 
     # 7. Record Checkpoint
     chk_dir = root / "control" / "checkpoints"

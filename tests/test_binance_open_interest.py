@@ -217,7 +217,11 @@ def test_binance_oi_rerun_bootstrap_idempotent_without_rmtree():
 
         norm_dir = root / "normalized" / "open_interest" / "v1" / "exchange=binance" / "market_type=perpetual" / "symbol=BTCUSDT" / "period=5m"
         parquet_files = list(norm_dir.rglob("*.parquet"))
-        assert len(parquet_files) == 1, "Must not duplicate parquet files per year"
+        assert len(parquet_files) == 1, "Idempotent re-run on identical data must not create duplicate generation files"
+
+        manifest_file = root / "control" / "manifests" / "binance_usdm_open_interest.jsonl"
+        manifest_lines = manifest_file.read_text(encoding="utf-8").strip().splitlines()
+        assert len(manifest_lines) == 1, "Idempotent re-run must not append duplicate manifest entries"
 
 
 def test_binance_oi_invalid_period_rejected():
@@ -230,8 +234,10 @@ def test_binance_rolling_window_accumulation_preserves_old_history_outside_windo
 
     Scenario:
     - Partition year=2026 initially contains historical observation T_old (e.g. 60 days ago, no longer in 30d API window).
+    - Initial generation G1 is written to disk.
     - New ingestion returns only current rolling window (T_new_1, T_new_2).
-    - Merged partition must contain: T_old + T_new_1 + T_new_2, sorted ascending, 0 duplicate keys.
+    - New generation G2 is created containing: T_old + T_new_1 + T_new_2, sorted ascending, 0 duplicate keys.
+    - Generation G1 remains byte-identical on disk (immutable).
     """
     with tempfile.TemporaryDirectory() as tmp_dir:
         root = Path(tmp_dir)
@@ -243,7 +249,7 @@ def test_binance_rolling_window_accumulation_preserves_old_history_outside_windo
             ident,
             period="5m",
         )
-        target_parquet = (
+        yr_dir = (
             root
             / "normalized"
             / "open_interest"
@@ -253,12 +259,12 @@ def test_binance_rolling_window_accumulation_preserves_old_history_outside_windo
             / "symbol=BTCUSDT"
             / "period=5m"
             / f"year={old_rec.observation_time.year}"
-            / f"part-btcusdt_5m_{old_rec.observation_time.year}.parquet"
         )
         from crypto_quant.ingestion.binance.open_interest import merge_and_write_oi_parquet
 
-        merge_and_write_oi_parquet(target_parquet, [old_rec])
-        assert target_parquet.exists()
+        g1_path, g1_rows, g1_sha, _ = merge_and_write_oi_parquet(yr_dir, "BTCUSDT", "5m", old_rec.observation_time.year, [old_rec])
+        assert g1_path.exists()
+        g1_bytes_before = g1_path.read_bytes()
 
         # 2. New Ingestion: returns only current window (timestamps > 1785000000000)
         mock_client = MagicMock()
@@ -279,10 +285,14 @@ def test_binance_rolling_window_accumulation_preserves_old_history_outside_windo
         assert res["records_count"] == 2  # batch count
         assert res["total_accumulated_rows"] == 3  # T_old + 2 new records
 
-        # 3. Verify on disk parquet
+        # 3. Verify that old generation G1 is 100% byte-identical (immutable)
+        assert g1_path.read_bytes() == g1_bytes_before
+
+        # 4. Verify that new generation G2 contains all 3 rows strictly sorted
+        active_parquet = Path(res["parquet_files"][0])
         import pyarrow.parquet as pq
 
-        tbl = pq.ParquetFile(target_parquet).read()
+        tbl = pq.ParquetFile(active_parquet).read()
         assert len(tbl) == 3
         timestamps = tbl["observation_time"].to_pylist()
         assert timestamps[0] < timestamps[1] < timestamps[2]

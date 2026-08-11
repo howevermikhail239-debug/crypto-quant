@@ -133,7 +133,7 @@ def test_bybit_accumulation_preserves_earlier_partition_data():
             ident,
             period="5m",
         )
-        target_parquet = (
+        yr_dir = (
             root
             / "normalized"
             / "open_interest"
@@ -143,12 +143,12 @@ def test_bybit_accumulation_preserves_earlier_partition_data():
             / "symbol=BTCUSDT"
             / "period=5m"
             / f"year={old_rec.observation_time.year}"
-            / f"part-btcusdt_5m_{old_rec.observation_time.year}.parquet"
         )
         from crypto_quant.ingestion.binance.open_interest import merge_and_write_oi_parquet
 
-        merge_and_write_oi_parquet(target_parquet, [old_rec])
-        assert target_parquet.exists()
+        g1_path, g1_rows, g1_sha, _ = merge_and_write_oi_parquet(yr_dir, "BTCUSDT", "5m", old_rec.observation_time.year, [old_rec])
+        assert g1_path.exists()
+        g1_bytes_before = g1_path.read_bytes()
 
         # 2. New Ingestion: returns newer observations (timestamps > 1785000000000)
         mock_client = MagicMock()
@@ -171,13 +171,32 @@ def test_bybit_accumulation_preserves_earlier_partition_data():
         assert res["records_count"] == 2
         assert res["total_accumulated_rows"] == 3  # T_old + 2 new records
 
+        # 3. Verify that old generation G1 is 100% byte-identical (immutable)
+        assert g1_path.read_bytes() == g1_bytes_before
+
+        # 4. Verify that new generation G2 contains all 3 records strictly sorted
+        active_parquet = Path(res["parquet_files"][0])
         import pyarrow.parquet as pq
 
-        tbl = pq.ParquetFile(target_parquet).read()
+        tbl = pq.ParquetFile(active_parquet).read()
         assert len(tbl) == 3
         timestamps = tbl["observation_time"].to_pylist()
         assert timestamps[0] < timestamps[1] < timestamps[2]
         assert tbl["oi_base"][0].as_py() == "50000"
+
+
+def test_bybit_single_open_interest_parsed_from_source_not_synthetic_division():
+    """Proves that single_side_oi_base is parsed directly from source singleOpenInterest without synthetic division."""
+    ident = funding_identity("BTCUSDT")
+    raw = {
+        "symbol": "BTCUSDT",
+        "openInterest": "300.000",
+        "singleOpenInterest": "120.000",  # Deliberately != 300 / 2 = 150
+        "timestamp": "1786429200000",
+    }
+    rec = parse_bybit_open_interest_item(raw, ident, period="5m")
+    assert rec.oi_base == "300.000"
+    assert rec.single_side_oi_base == "120.000", "Must parse source field directly without synthetic division"
 
 
 def test_bybit_historical_knowledge_time_must_be_null():
@@ -271,4 +290,8 @@ def test_bybit_oi_rerun_bootstrap_idempotent_without_rmtree():
 
         norm_dir = root / "normalized" / "open_interest" / "v1" / "exchange=bybit" / "market_type=perpetual" / "symbol=BTCUSDT" / "period=5m"
         parquet_files = list(norm_dir.rglob("*.parquet"))
-        assert len(parquet_files) == 1, "Must not duplicate parquet files per year"
+        assert len(parquet_files) == 1, "Idempotent re-run on identical data must not create duplicate generation files"
+
+        manifest_file = root / "control" / "manifests" / "bybit_linear_open_interest.jsonl"
+        manifest_lines = manifest_file.read_text(encoding="utf-8").strip().splitlines()
+        assert len(manifest_lines) == 1, "Idempotent re-run must not append duplicate manifest entries"
