@@ -316,7 +316,7 @@ Predicted/current funding rate is not mixed with realized settlement history.
 | `dedup_fingerprint` | no | Deterministic fallback when native ID absent |
 | `dedup_collision_risk` | no | Explicit flag |
 
-Bybit `snapshot` is treated as message/batch type, not as replaceable current state. Binance latest-within-window snapshots are explicitly marked incomplete for event-count reconstruction.
+Bybit `snapshot` is treated as message/batch type, not as replaceable current state. Binance selected-within-window observations are explicitly marked incomplete for event-count reconstruction; the current `latest` versus `largest` official-documentation conflict is preserved as `DOC_CONFLICT_LATEST_VS_LARGEST`.
 
 ## 4.6 Instrument metadata snapshot
 
@@ -434,7 +434,7 @@ Official section: [USDⓈ-M market-data REST](https://developers.binance.com/en/
 | Funding | `/fapi/v1/fundingRate`: symbol, fundingRate, fundingTime, markPrice, rateType | Realized funding settlement; rate type retained | Shared endpoint-specific rate-limit bucket |
 | OI current | `/fapi/v1/openInterest` | `current_total`, source unit retained | Current snapshot only |
 | OI history | `/futures/data/openInterestHist`: sumOpenInterest, sumOpenInterestValue, timestamp | Keep source base-like value and source quote value separately | Current official docs: latest one month only; continuous local accumulation required |
-| Liquidation | `<symbol>@forceOrder`: event time + force-order payload | Side/order/qty/price fields preserved; completeness `throttled_latest_snapshot` | Only latest liquidation order per symbol within 1000ms snapshot window; unsuitable for complete event-count backtest |
+| Liquidation | `<symbol>@forceOrder`: event time + force-order payload | Side/order/qty/price fields preserved; completeness `incomplete_throttled_snapshot` | At most one selected liquidation order per symbol within 1000ms; current official sources conflict on `latest` versus `largest`, so `DOC_CONFLICT_LATEST_VS_LARGEST` is retained; unsuitable for complete event-count backtest |
 
 ## 6.3 Bybit Spot
 
@@ -850,7 +850,7 @@ Verified on 2026-08-10:
 3. Binance USDⓈ-M `/fapi/v1/klines` has limit-dependent weights and max limit 1500; `/fapi/v1/aggTrades` has current REST history not older than 24 hours and an endpoint weight documented as 20. Source: [USDⓈ-M market data](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data).
 4. Binance funding history is `/fapi/v1/fundingRate`, with explicit funding time/rate/mark price fields and a shared 500/5min/IP bucket. Same official USDⓈ-M source.
 5. Binance OI current and historical statistics are separate endpoints; current official OI statistics documentation states only the latest one month is available. Same official USDⓈ-M source.
-6. Binance liquidation stream `<symbol>@forceOrder` is a latest-order snapshot within 1000ms, not a complete event feed. Source: [official liquidation stream section](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/websocket-market-streams/Liquidation-Order-Streams) and current official connector references.
+6. Binance liquidation stream `<symbol>@forceOrder` emits at most one selected order within 1000ms and is not a complete event feed. The current API-reference corpus says `latest`, while the 2026-04-10 official changelog says the wording changed to `largest`; preserve `DOC_CONFLICT_LATEST_VS_LARGEST`. Sources: [official WebSocket migration notice](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/websocket-market-streams/Important-WebSocket-Change-Notice) and [USDⓈ-M changelog](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/change-log).
 7. Bybit `/v5/market/kline` covers spot/linear/inverse, max 1000, returns reverse-sorted candles, and defines linear volume in base/turnover in quote versus inverse converse. Source: [Bybit kline](https://bybit-exchange.github.io/docs/v5/market/kline).
 8. Bybit `/v5/market/recent-trade` defines `side` as taker side; spot max is 60 and other categories max 1000; docs point to an official historical trade portal. Source: [Bybit recent trades](https://bybit-exchange.github.io/docs/v5/market/recent-trade).
 9. Bybit OI is derivatives-only, max 200 with cursor, intervals 5m–1d; `openInterest` is sum of both sides, linear BTCUSDT unit is BTC and inverse BTCUSD unit is USD. Source: [Bybit open interest](https://bybit-exchange.github.io/docs/v5/market/open-interest).

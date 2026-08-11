@@ -24,6 +24,7 @@ from crypto_quant.ingestion.binance.liquidations import (
     collect_binance_liquidations_live,
     parse_binance_liquidation_message,
     persist_binance_liquidation_batch,
+    validate_binance_liquidation_records,
 )
 from crypto_quant.ingestion.bybit.funding import funding_identity as bybit_identity
 
@@ -137,6 +138,7 @@ def test_source_fields_are_preserved_without_liquidation_volume_or_position_infe
     assert record.selection_rule == SELECTION_RULE
     assert record.local_capture_completeness == LOCAL_CAPTURE_COMPLETENESS
     assert "SOURCE_SELECTION_INCOMPLETENESS" in record.dq_flags
+    assert validate_binance_liquidation_records([record]) == []
 
 
 def test_unknown_nonempty_order_attributes_are_preserved_and_clock_skew_is_flagged():
@@ -265,6 +267,11 @@ def test_snapshot_observations_append_exact_replay_deduplicates_and_lineage_is_c
     assert checkpoint["instrument_id"] == latest["instrument_id"]
     assert checkpoint["source_claimed_completeness"] == SOURCE_COMPLETENESS
     assert checkpoint["selection_rule"] == SELECTION_RULE
+    assert checkpoint["last_raw_object_ref"] == latest["raw_object_ref"]
+    assert checkpoint["last_raw_sha256"] == latest["raw_sha256"]
+    assert checkpoint["last_parquet_refs"] == latest["created_parquets"]
+    assert checkpoint["last_parquet_sha256"] == latest["parquet_sha256"]
+    assert "coverage_complete" not in checkpoint
 
 
 def test_different_wire_envelopes_are_not_heuristically_economic_deduplicated(tmp_path: Path):

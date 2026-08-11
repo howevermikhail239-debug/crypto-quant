@@ -18,7 +18,7 @@ The frozen field-level contract is `schemas/contracts/binance_usdm_liquidation_w
 
 ```text
 C:\crypto_quant_data\evidence\phase1d3_audit\phase1d3_audit_evidence_index.json
-25 entries; 25/25 content SHA-256 values verified; 0 broken
+27 entries; 27/27 content SHA-256 values verified; 25 accepted evidence artifacts and 2 preserved invalid empty WAF-challenge responses
 ```
 
 ## Fields and identity
@@ -47,7 +47,10 @@ Raw JSONL and normalized Parquet use immutable content-addressed objects/generat
 The production Market WebSocket was observed for 43.97 seconds on `btcusdt@forceOrder`:
 
 ```text
+subscription_mode = REQUEST_SUBSCRIBE
 ws_endpoint = wss://fstream.binance.com/market/ws
+effective_url = wss://fstream.binance.com/market/ws
+topic = btcusdt@forceOrder
 transport_status = PASS
 subscription_status = PASS
 heartbeat_liveness = PASS
@@ -72,7 +75,7 @@ checkpoint:      present and identity/lineage consistent
 active synthetic rows: 0
 ```
 
-The local receive clock was about 0.59 seconds behind the source event timestamp for this observation, below the conservative five-minute anomaly threshold. This single sample does not establish latency or clock-quality statistics.
+The local receive clock was about 1.60 seconds behind source `E` and about 0.59 seconds behind source `T` for this observation, below the collector's conservative five-minute hard anomaly threshold. Both source timestamps and local receive time remain separately recoverable; the sample is a clock-quality observation, not a latency estimate, and does not establish clock-quality statistics.
 
 ## Validation and review
 

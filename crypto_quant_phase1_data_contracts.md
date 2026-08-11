@@ -291,7 +291,7 @@ Funding interval/caps come from current funding info/metadata snapshot. Knowledg
 | `o.z` | Accumulated filled quantity | yes | `accumulated_filled_quantity` | ≥0 |
 | `o.T` | Order trade time, ms | yes | `event_time` | UTC |
 
-Completeness is always `throttled_latest_snapshot`: only the latest liquidation order per symbol within each 1000ms interval is pushed. No event-count completeness is inferred.
+Completeness is always `incomplete_throttled_snapshot`: at most one selected liquidation order per symbol within each 1000ms interval is pushed. Current official sources conflict on whether the selected order is the `latest` or the `largest`; freeze this as `DOC_CONFLICT_LATEST_VS_LARGEST` until Binance resolves the inconsistency. No event-count completeness is inferred.
 
 ---
 
