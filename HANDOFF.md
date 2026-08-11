@@ -159,3 +159,14 @@ Run these exactly as specified:
 git diff --check
 git status --short --branch
 ```
+
+## P. AI ENVIRONMENT PORTABILITY
+- **Primary repository instructions:** `AGENTS.md`, the normative specifications, committed contracts/tests, and this handoff.
+- **Antigravity project agents:** PRESERVED IN GIT under `.agents/agents/` and `.agents/rules/`.
+- **Antigravity backup:** `C:\crypto_quant_data\migration_backup\antigravity_agents\pre_codex_20260811\`
+- **Integrity manifest:** `C:\crypto_quant_data\migration_backup\antigravity_agents\pre_codex_20260811\integrity_manifest.json`
+- **Files:** 5 project-scoped Antigravity agent/rule files.
+- **Hash validation:** 5/5 PASS against the sanitation backup and the restored repository files.
+- **Restore target:** repository-relative `.agents/agents/` and `.agents/rules/`, preserving the manifest paths exactly.
+- **Codex-specific instructions:** tracked `AGENTS.md` plus the tracked `.agents/skills/quant-critical-review/` skill.
+- **Important:** switching AI environments must not overwrite or delete the other environment's project-scoped instructions. Do not copy global credentials, tokens, browser state, or home-directory configuration into this repository.
