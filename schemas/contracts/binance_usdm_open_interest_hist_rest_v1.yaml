@@ -1,0 +1,29 @@
+contract_id: binance.usdm.rest.open-interest-hist.v1
+source_dataset_id: binance.usdm.open_interest_hist.rest
+exchange: binance
+market_type: perpetual
+contract_type: linear_perpetual
+source_kind: rest
+official_documentation_url: https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Open-Interest-Statistics
+verified_at: "2026-08-11T00:00:00Z"
+schema_version: 1.0.0
+request_rules:
+  endpoint: /futures/data/openInterestHist
+  method: GET
+  mandatory_params:
+    symbol: explicit_symbol
+    period: "enum [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]"
+  limit_max: 500
+  timestamp_unit: ms
+  history_limit: "Latest 30 days only; startTime older than 30 days returns API error code -1130"
+  traversal: "ascending in 500-bar chunks: next_startTime = last_timestamp + 1ms"
+fields:
+  - {source_field: symbol, semantic_meaning: contract_symbol, source_unit: string, nullable: false, canonical_field: symbol, transformation: exact_match, normalized_unit: symbol}
+  - {source_field: sumOpenInterest, semantic_meaning: total_open_interest_base_asset, source_unit: base_asset, nullable: false, canonical_field: oi_base, transformation: string_to_decimal_raw, normalized_unit: base_asset}
+  - {source_field: sumOpenInterestValue, semantic_meaning: total_open_interest_notional_value, source_unit: USDT, nullable: false, canonical_field: oi_notional, transformation: string_to_decimal_raw, normalized_unit: USDT}
+  - {source_field: CMCCirculatingSupply, semantic_meaning: coinmarketcap_circulating_supply, source_unit: base_asset, nullable: true, canonical_field: cmc_circulating_supply, transformation: retain_raw_only, normalized_unit: null}
+  - {source_field: timestamp, semantic_meaning: period_end_time, source_unit: epoch_ms, nullable: false, canonical_field: observation_time, transformation: epoch_ms_to_utc, normalized_unit: UTC}
+known_limitations:
+  - "Official REST history returns only latest 30 days; continuous local accumulation required to maintain longer history."
+  - "Historical knowledge_time is unknown; bucket end timestamp is not publication availability time."
+  - "Binance does not provide single_side_oi_base; canonical field is null (no synthetic division in raw storage)."

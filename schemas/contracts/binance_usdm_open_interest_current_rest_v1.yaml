@@ -1,0 +1,22 @@
+contract_id: binance.usdm.rest.open-interest-current.v1
+source_dataset_id: binance.usdm.open_interest_current.rest
+exchange: binance
+market_type: perpetual
+contract_type: linear_perpetual
+source_kind: rest
+official_documentation_url: https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Open-Interest
+verified_at: "2026-08-11T00:00:00Z"
+schema_version: 1.0.0
+request_rules:
+  endpoint: /fapi/v1/openInterest
+  method: GET
+  mandatory_params:
+    symbol: explicit_symbol
+  semantics: "Point-in-time snapshot of current total open interest"
+fields:
+  - {source_field: symbol, semantic_meaning: contract_symbol, source_unit: string, nullable: false, canonical_field: symbol, transformation: exact_match, normalized_unit: symbol}
+  - {source_field: openInterest, semantic_meaning: current_open_interest_base_asset, source_unit: base_asset, nullable: false, canonical_field: oi_base, transformation: string_to_decimal_raw, normalized_unit: base_asset}
+  - {source_field: time, semantic_meaning: transaction_time, source_unit: epoch_ms, nullable: false, canonical_field: observation_time, transformation: epoch_ms_to_utc, normalized_unit: UTC}
+known_limitations:
+  - "Point snapshot only, no historical pagination."
+  - "Transaction time reflects matching engine state, does not prove client network availability."

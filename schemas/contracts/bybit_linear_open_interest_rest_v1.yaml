@@ -1,0 +1,28 @@
+contract_id: bybit.linear.rest.open-interest.v1
+source_dataset_id: bybit.linear.open_interest.rest
+exchange: bybit
+market_type: perpetual
+contract_type: linear_perpetual
+source_kind: rest
+official_documentation_url: https://bybit-exchange.github.io/docs/v5/market/open-interest
+verified_at: "2026-08-11T00:00:00Z"
+schema_version: 1.0.0
+request_rules:
+  endpoint: /v5/market/open-interest
+  method: GET
+  mandatory_params:
+    category: linear
+    symbol: explicit_symbol
+    intervalTime: "enum [5min, 15min, 30min, 1h, 4h, 1d]"
+  limit_max: 200
+  pagination: "cursor-based via nextPageCursor until empty"
+  timestamp_unit: ms
+fields:
+  - {source_field: symbol, semantic_meaning: contract_symbol, source_unit: string, nullable: false, canonical_field: symbol, transformation: exact_match, normalized_unit: symbol}
+  - {source_field: openInterest, semantic_meaning: total_open_interest_both_sides_base_asset, source_unit: base_asset, nullable: false, canonical_field: oi_base, transformation: string_to_decimal_raw, normalized_unit: base_asset}
+  - {source_field: singleOpenInterest, semantic_meaning: single_side_open_interest_base_asset, source_unit: base_asset, nullable: true, canonical_field: single_side_oi_base, transformation: string_to_decimal_raw, normalized_unit: base_asset}
+  - {source_field: timestamp, semantic_meaning: period_end_time, source_unit: epoch_ms, nullable: false, canonical_field: observation_time, transformation: epoch_ms_to_utc, normalized_unit: UTC}
+known_limitations:
+  - "Bybit does NOT provide notional value (sumOpenInterestValue) directly in REST history; canonical oi_notional is null (no silent conversion)."
+  - "openInterest represents the sum of both long and short sides; singleOpenInterest represents single side."
+  - "Historical knowledge_time is unknown; bucket timestamp is not publication availability time."
