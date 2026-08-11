@@ -3,6 +3,7 @@
 import json
 import tempfile
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -10,7 +11,7 @@ import pytest
 import yaml
 
 from crypto_quant.contracts import DataContract
-from crypto_quant.ingestion.binance.funding import funding_identity
+from crypto_quant.ingestion.bybit.funding import funding_identity
 from crypto_quant.ingestion.bybit.liquidations import (
     CONTRACT_ID,
     DATASET_ID,
@@ -21,6 +22,7 @@ from crypto_quant.ingestion.bybit.liquidations import (
     persist_bybit_liquidation_batch,
     validate_liquidation_records_dq,
 )
+from crypto_quant.time import parse_epoch
 
 
 def test_bybit_liquidation_frozen_yaml_contract_validates():
@@ -48,7 +50,7 @@ def test_bybit_liquidation_frozen_yaml_contract_validates():
         "T is official Bybit 'updated time', not trade/fill/execution time"
     )
 
-    # v field unit must be base_coin (VERIFIED for BTCUSDT Linear)
+    # v field unit must be base_coin for the in-scope Bybit USDT linear perpetuals.
     v_field = next(f for f in contract.fields if f.source_field == "data[].v")
     assert v_field.source_unit == "base_coin"
 
@@ -111,7 +113,7 @@ def test_bybit_liquidation_price_semantics_and_units():
     assert rec.source_price == "58999.50"
     assert rec.average_fill_price is None, "Bybit does not provide execution fill price; no synthetic guessing"
     assert rec.source_quantity == "0.12345678"
-    assert rec.source_quantity_unit == "base_coin"  # VERIFIED: BTCUSDT Linear qty in base coin (BTC)
+    assert rec.source_quantity_unit == "base_coin"
     assert rec.quantity_base == "0.12345678"
     assert rec.notional_quote is None, "No silent synthetic multiplication without versioned derivation lineage"
 
@@ -121,6 +123,152 @@ def test_bybit_liquidation_price_semantics_and_units():
     assert rec.event_time == expected_event_time, "event_time must map to T (updated timestamp), not ts"
     expected_exchange_ts = parse_epoch(1786434825553, unit="ms")
     assert rec.exchange_timestamp == expected_exchange_ts, "exchange_timestamp must map to ts (system push time)"
+
+
+def test_bybit_liquidation_eth_side_decimal_and_time_semantics():
+    """ETHUSDT has the same verified stream semantics without inheriting a BTC identity."""
+    ident = funding_identity("ETHUSDT")
+    recv_t = datetime(2026, 8, 11, 10, 0, 0, 123456, tzinfo=UTC)
+    raw_msg = {
+        "topic": "allLiquidation.ETHUSDT",
+        "type": "snapshot",
+        "ts": 1786434825553,
+        "data": [
+            {"T": 1786434825100, "s": "ETHUSDT", "S": "Buy", "v": "12.345000", "p": "3050.1250"},
+            {"T": 1786434825200, "s": "ETHUSDT", "S": "Sell", "v": "0.000100", "p": "3051.0000"},
+        ],
+    }
+
+    records = parse_bybit_liquidation_message(raw_msg, ident, received_at=recv_t)
+
+    assert ident.exchange == "bybit"
+    assert records[0].instrument_id == ident.instrument_id
+    assert records[0].instrument_id != funding_identity("BTCUSDT").instrument_id
+    assert [r.position_side_liquidated for r in records] == ["LONG", "SHORT"]
+    assert [r.source_quantity for r in records] == ["12.345000", "0.000100"]
+    assert [r.source_price for r in records] == ["3050.1250", "3051.0000"]
+    assert [Decimal(r.source_quantity) for r in records] == [Decimal("12.345000"), Decimal("0.000100")]
+    assert [Decimal(r.source_price) for r in records] == [Decimal("3050.1250"), Decimal("3051.0000")]
+    assert records[0].event_time == parse_epoch(1786434825100, unit="ms")
+    assert records[0].exchange_timestamp == parse_epoch(1786434825553, unit="ms")
+    assert all(r.knowledge_time == recv_t for r in records)
+    assert all(r.source_quantity_unit == "base_coin" for r in records)
+
+
+def test_bybit_liquidation_eth_multiplicity_replay_and_lineage(tmp_path: Path):
+    """ETH exact-wire replay deduplicates while identical batch events retain multiplicity and lineage."""
+    received_at = datetime(2026, 8, 11, 10, 0, 0, tzinfo=UTC)
+    raw_msg = {
+        "topic": "allLiquidation.ETHUSDT",
+        "type": "snapshot",
+        "ts": 1786434825553,
+        "data": [
+            {"T": 1786434825100, "s": "ETHUSDT", "S": "Buy", "v": "1.5", "p": "3050.0"},
+            {"T": 1786434825100, "s": "ETHUSDT", "S": "Buy", "v": "1.5", "p": "3050.0"},
+        ],
+    }
+    raw_wire = json.dumps(raw_msg, separators=(",", ":"))
+
+    first = persist_bybit_liquidation_batch([(raw_msg, raw_wire)], "ETHUSDT", tmp_path, received_at=received_at)
+    replay = persist_bybit_liquidation_batch([(raw_msg, raw_wire)], "ETHUSDT", tmp_path, received_at=received_at)
+
+    assert first["records_count"] == 2
+    assert replay["total_accumulated_rows"] == 2
+    raw_files = list((tmp_path / "raw" / "bybit" / "perpetual" / "liquidations" / "ETHUSDT").rglob("*.jsonl"))
+    parquet_files = list(
+        (tmp_path / "normalized" / "liquidations" / "v1" / "exchange=bybit" / "market_type=perpetual" / "symbol=ETHUSDT").rglob("*.parquet")
+    )
+    manifest_file = tmp_path / "control" / "manifests" / "bybit_linear_liquidations.jsonl"
+    checkpoint_file = tmp_path / "control" / "checkpoints" / "bybit_linear_liquidations_ETHUSDT.json"
+
+    assert len(raw_files) == 1
+    assert len(parquet_files) == 1
+    assert pq.ParquetFile(parquet_files[0]).metadata.num_rows == 2
+    assert checkpoint_file.exists()
+    manifest_rows = [json.loads(line) for line in manifest_file.read_text(encoding="utf-8").splitlines()]
+    assert len(manifest_rows) == 1
+    assert manifest_rows[0]["symbol"] == "ETHUSDT"
+    assert "symbol=ETHUSDT" in manifest_rows[0]["created_parquets"][0]
+    assert "liquidations/ETHUSDT" in manifest_rows[0]["raw_object_ref"]
+
+
+def test_bybit_liquidation_cross_symbol_same_event_never_collides(tmp_path: Path):
+    """BTC and ETH retain independent lineage in one root, even for equal event values."""
+    received_at = datetime(2026, 8, 11, 10, 0, 0, tzinfo=UTC)
+    common = {"T": 1786434825100, "S": "Buy", "v": "1.0", "p": "3000.0"}
+    btc_message = {"topic": "allLiquidation.BTCUSDT", "ts": 1786434825553, "data": [{**common, "s": "BTCUSDT"}]}
+    eth_message = {"topic": "allLiquidation.ETHUSDT", "ts": 1786434825553, "data": [{**common, "s": "ETHUSDT"}]}
+
+    btc_result = persist_bybit_liquidation_batch([btc_message], "BTCUSDT", tmp_path, received_at=received_at)
+    btc_checkpoint = tmp_path / "control" / "checkpoints" / "bybit_linear_liquidations_BTCUSDT.json"
+    btc_checkpoint_before_eth = btc_checkpoint.read_bytes()
+    eth_result = persist_bybit_liquidation_batch([eth_message], "ETHUSDT", tmp_path, received_at=received_at)
+
+    manifest_file = tmp_path / "control" / "manifests" / "bybit_linear_liquidations.jsonl"
+    manifest_rows = [json.loads(line) for line in manifest_file.read_text(encoding="utf-8").splitlines()]
+    manifest_by_symbol = {row["symbol"]: row for row in manifest_rows}
+    eth_checkpoint = tmp_path / "control" / "checkpoints" / "bybit_linear_liquidations_ETHUSDT.json"
+    btc_raw = list((tmp_path / "raw" / "bybit" / "perpetual" / "liquidations" / "BTCUSDT").rglob("*.jsonl"))
+    eth_raw = list((tmp_path / "raw" / "bybit" / "perpetual" / "liquidations" / "ETHUSDT").rglob("*.jsonl"))
+    btc_parquet = list(
+        (tmp_path / "normalized" / "liquidations" / "v1" / "exchange=bybit" / "market_type=perpetual" / "symbol=BTCUSDT").rglob("*.parquet")
+    )
+    eth_parquet = list(
+        (tmp_path / "normalized" / "liquidations" / "v1" / "exchange=bybit" / "market_type=perpetual" / "symbol=ETHUSDT").rglob("*.parquet")
+    )
+
+    assert btc_result["total_accumulated_rows"] == 1
+    assert eth_result["total_accumulated_rows"] == 1
+    assert btc_checkpoint.read_bytes() == btc_checkpoint_before_eth
+    assert btc_checkpoint.name != eth_checkpoint.name
+    assert btc_checkpoint.exists() and eth_checkpoint.exists()
+    assert btc_checkpoint.read_bytes() != eth_checkpoint.read_bytes()
+    assert len(btc_raw) == len(eth_raw) == 1
+    assert len(btc_parquet) == len(eth_parquet) == 1
+    assert pq.ParquetFile(btc_parquet[0]).metadata.num_rows == 1
+    assert pq.ParquetFile(eth_parquet[0]).metadata.num_rows == 1
+    assert set(manifest_by_symbol) == {"BTCUSDT", "ETHUSDT"}
+    assert manifest_by_symbol["BTCUSDT"]["instrument_id"] != manifest_by_symbol["ETHUSDT"]["instrument_id"]
+    assert manifest_by_symbol["BTCUSDT"]["raw_object_ref"] != manifest_by_symbol["ETHUSDT"]["raw_object_ref"]
+    assert manifest_by_symbol["BTCUSDT"]["created_parquets"] != manifest_by_symbol["ETHUSDT"]["created_parquets"]
+
+    persist_bybit_liquidation_batch([eth_message], "ETHUSDT", tmp_path, received_at=received_at)
+    assert btc_checkpoint.read_bytes() == btc_checkpoint_before_eth
+
+    btc = parse_bybit_liquidation_message(btc_message, funding_identity("BTCUSDT"), received_at)[0]
+    eth = parse_bybit_liquidation_message(eth_message, funding_identity("ETHUSDT"), received_at)[0]
+
+    assert btc.instrument_id != eth.instrument_id
+    assert btc.dedup_fingerprint != eth.dedup_fingerprint
+    assert (btc.exchange, btc.instrument_id, btc.event_time, btc.dedup_fingerprint) != (
+        eth.exchange,
+        eth.instrument_id,
+        eth.event_time,
+        eth.dedup_fingerprint,
+    )
+
+
+def test_bybit_liquidation_eth_wrong_routing_fails_before_storage_writes(tmp_path: Path):
+    """ETH routing and payload-symbol mismatches fail closed before raw or normalized lineage exists."""
+    wrong_topic = {
+        "topic": "allLiquidation.BTCUSDT",
+        "ts": 1786434825553,
+        "data": [{"T": 1786434825100, "s": "ETHUSDT", "S": "Buy", "v": "1", "p": "3000"}],
+    }
+    wrong_payload_symbol = {
+        "topic": "allLiquidation.ETHUSDT",
+        "ts": 1786434825553,
+        "data": [{"T": 1786434825100, "s": "BTCUSDT", "S": "Buy", "v": "1", "p": "3000"}],
+    }
+
+    with pytest.raises(ValueError, match="Topic mismatch"):
+        persist_bybit_liquidation_batch([wrong_topic], "ETHUSDT", tmp_path)
+    with pytest.raises(ValueError, match="Symbol mismatch"):
+        persist_bybit_liquidation_batch([wrong_payload_symbol], "ETHUSDT", tmp_path)
+
+    assert not (tmp_path / "raw").exists()
+    assert not (tmp_path / "normalized").exists()
+    assert not (tmp_path / "control").exists()
 
 
 def test_bybit_liquidation_batch_identical_events_preserves_multiplicity():

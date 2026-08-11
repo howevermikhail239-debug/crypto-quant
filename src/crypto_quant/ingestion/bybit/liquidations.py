@@ -1,4 +1,4 @@
-"""Bybit Linear Liquidations Ingestion and Normalization (Phase 1D.3A).
+"""Bybit Linear Liquidations Ingestion and Normalization (Phase 1D.3).
 
 Consumes real-time liquidations from WebSocket topic `allLiquidation.{symbol}`.
 Bybit claims all liquidations are reported (source_claimed_completeness=ALL_LIQUIDATIONS).
@@ -13,8 +13,10 @@ Enforces:
 - Explicit Price Semantics: price_semantic="bankruptcy_price" (p is bankruptcy price in Bybit contract)
 - Explicit T Semantics: T is the liquidation event *updated* timestamp (ms); NOT a fill/execution/trade time.
   Source: Bybit V5 allLiquidation official documentation (VERIFIED)
-- Quantity semantics: v is executed size in base coin (BTC for BTCUSDT Linear). Contract size = 1 BTC.
-  Source: Bybit V5 API contract size and qty denomination docs (VERIFIED)
+- Quantity semantics: v is executed size in the instrument base coin for the in-scope
+  USDT linear perpetuals. The base asset is carried by the canonical instrument identity.
+  Source: Bybit V5 all-liquidation and linear product-term documentation (VERIFIED for
+  BTCUSDT and ETHUSDT).
 - Decimal preservation: raw string decimal for size (v) and price (p)
 - Realtime Knowledge Time: knowledge_time = received_at (UTC arrival timestamp to eliminate look-ahead leakage)
 - Message ID = SHA-256 of raw WS envelope. No native per-event ID in stream.
@@ -46,7 +48,7 @@ from ...contracts import ContractField, DataContract
 from ...identity import InstrumentIdentity
 from ...paths import disk_free_bytes
 from ...time import parse_epoch, utc_now
-from ..binance.funding import funding_identity
+from .funding import funding_identity
 
 logger = logging.getLogger(__name__)
 
@@ -117,10 +119,10 @@ def bybit_linear_liquidation_data_contract() -> DataContract:
         ),
         ContractField(
             source_field="data[].v",
-            # VERIFIED: official docs label = 'Executed size' (string). Economic unit for BTCUSDT Linear = base coin (BTC).
-            # Bybit V5 linear perpetual contract size = 1 BTC; qty denominated in base coin.
+            # VERIFIED: official docs label = 'Executed size' (string). For the in-scope
+            # USDT linear perpetuals, quantity is denominated in the instrument base coin.
             # Source: bybit-exchange.github.io/docs/v5/websocket/public/all-liquidation
-            semantic_meaning="Executed liquidation size in base coin (BTC for BTCUSDT Linear)",
+            semantic_meaning="Executed liquidation size in the instrument base coin",
             source_unit="base_coin",
             nullable=False,
             canonical_field="source_quantity",
@@ -312,7 +314,7 @@ def parse_bybit_liquidation_message(
             source_side=raw_side_str,
             source_side_semantic="LIQUIDATED_POSITION_SIDE",
             source_quantity=str(size_dec),
-            source_quantity_unit="base_coin",  # VERIFIED: BTCUSDT Linear qty in base coin (BTC)
+            source_quantity_unit="base_coin",  # Verified for the in-scope USDT linear perpetuals.
             quantity_base=str(size_dec),
             notional_quote=None,  # No silent synthetic multiplication
             last_filled_quantity=None,
@@ -863,4 +865,3 @@ async def collect_bybit_liquidations_live(
         "duration_seconds": round(time.time() - start_time, 2),
         "flush_count": len(persist_results),
     }
-

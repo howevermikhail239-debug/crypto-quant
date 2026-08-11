@@ -92,15 +92,15 @@ fields:
 
   - source_field: "data[].v"
     # VERIFIED: official docs label = "Executed size" (string).
-    # Economic unit for BTCUSDT Linear: base coin (BTC). Bybit V5 linear perpetual contract size = 1 BTC.
-    # qty denominated in base coin. Source: bybit-exchange.github.io V5 trade/order parameters.
+    # For the in-scope USDT linear perpetuals, quantity is denominated in the
+    # instrument base coin. Source: Bybit V5 linear product terms.
     semantic_meaning: executed_liquidation_size_in_base_coin
     source_unit: base_coin
     nullable: false
     canonical_field: source_quantity
     transformation: string_to_decimal_raw
     normalized_unit: base_coin
-    evidence: VERIFIED (executed_size_label=VERIFIED; unit_base_coin_BTCUSDT=VERIFIED)
+    evidence: VERIFIED (executed_size_label=VERIFIED; unit_base_coin_BTCUSDT_ETHUSDT=VERIFIED)
 
   - source_field: "data[].p"
     # VERIFIED: official docs label = "Bankruptcy price" (string).
