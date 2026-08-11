@@ -1,0 +1,191 @@
+contract_id: binance.usdm.ws.liquidation-order.v1
+source_dataset_id: binance.usdm.liquidations.ws
+exchange: binance
+market_type: perpetual
+contract_type: linear_perpetual
+source_kind: websocket
+official_documentation_url: https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/ws-streams
+verified_at: "2026-08-11T12:00:00Z"
+schema_version: 1.0.0
+
+stream_rules:
+  endpoint: wss://fstream.binance.com/market/ws
+  topic: "{symbol_lower}@forceOrder"
+  subscription_mode: JSON_SUBSCRIBE
+  source_window_ms: 1000
+  max_emitted_per_symbol_per_window: 1
+  selection_rule: DOC_CONFLICT_LATEST_VS_LARGEST
+  source_claimed_completeness: INCOMPLETE_THROTTLED_SNAPSHOT
+  delivery_semantics: MAX_ONE_SELECTED_PER_SYMBOL_PER_1000MS
+  local_capture_completeness: OBSERVED_DURING_CONNECTED_WINDOW_ONLY
+  snapshot_semantics: APPEND_ONLY_OBSERVATION_NOT_STATE_REPLACEMENT
+  dq_taxonomy:
+    source_selection: SOURCE_SELECTION_INCOMPLETENESS
+    local_disconnect: LOCAL_CAPTURE_GAP
+    connection_failure: CONNECTION_FAILURE
+    unresolved: UNKNOWN
+  evidence:
+    - "Current official API reference corpus still says latest within 1000ms."
+    - "Official 2026-04-10 changelog says the description changed from latest to largest within 1000ms."
+    - "The conflict is unresolved; neither interpretation permits a complete-event-stream claim."
+
+historical_sources:
+  public_market_bootstrap: NO_VERIFIED_PUBLIC_SOURCE
+  missed_public_ws_observations: UNRECOVERABLE_OR_UNKNOWN
+  fapi_v1_forceOrders:
+    security_type: USER_DATA
+    coverage: PAST_90_DAYS
+    classification: NOT_A_PUBLIC_MARKET_LIQUIDATION_BACKFILL_SOURCE
+
+native_event_id: NONE
+native_sequence_id: NONE
+dedup_guarantee: EXACT_WIRE_REPLAY_ONLY
+message_id: SHA256_EXACT_RAW_WS_ENVELOPE
+cross_envelope_economic_event_dedup: NOT_GUARANTEED
+manifest_count_semantics:
+  raw_message_count: received_wire_envelopes_in_batch
+  observation_count: parsed_source_observations_before_exact_replay_dedup
+  event_count: canonical_observations_after_exact_replay_dedup
+  row_count: canonical_rows_in_this_batch_after_exact_replay_dedup
+
+fields:
+  - source_field: e
+    semantic_meaning: event_type
+    source_unit: string
+    nullable: false
+    canonical_field: source_event_type
+    transformation: preserve
+    normalized_unit: string
+    validation_rules: [equals_forceOrder]
+
+  - source_field: E
+    semantic_meaning: websocket_event_time
+    source_unit: epoch_ms
+    timestamp_meaning: exchange_event_push_time
+    nullable: false
+    canonical_field: exchange_timestamp
+    transformation: epoch_ms_to_utc
+    normalized_unit: UTC
+
+  - source_field: o
+    semantic_meaning: selected_force_liquidation_order_snapshot
+    source_unit: object
+    nullable: false
+    canonical_field: source_order
+    transformation: preserve_raw
+    normalized_unit: object
+
+  - source_field: o.s
+    semantic_meaning: native_symbol
+    source_unit: string
+    nullable: false
+    canonical_field: symbol
+    transformation: exact_match
+    normalized_unit: symbol
+    validation_rules: [matches_requested_symbol]
+
+  - source_field: o.S
+    semantic_meaning: forced_liquidation_order_side
+    source_unit: string
+    nullable: false
+    canonical_field: source_side
+    transformation: preserve
+    normalized_unit: enum_BUY_SELL
+    validation_rules: [in_BUY_SELL]
+    known_limitations:
+      - "No direct official proof was found for a public-stream mapping to liquidated position side; canonical position_side_liquidated remains UNKNOWN."
+
+  - source_field: o.o
+    semantic_meaning: order_type
+    source_unit: string
+    nullable: false
+    canonical_field: order_type
+    transformation: preserve
+    normalized_unit: string
+
+  - source_field: o.f
+    semantic_meaning: time_in_force
+    source_unit: string
+    nullable: false
+    canonical_field: time_in_force
+    transformation: preserve
+    normalized_unit: string
+
+  - source_field: o.q
+    semantic_meaning: original_order_quantity
+    source_unit: base_asset_for_BTCUSDT_USDM
+    nullable: false
+    canonical_field: source_quantity
+    transformation: preserve_decimal_string
+    normalized_unit: BTC
+    validation_rules: [strictly_positive]
+    known_limitations:
+      - "Original quantity is not asserted to equal true liquidation volume."
+
+  - source_field: o.p
+    semantic_meaning: order_price
+    source_unit: quote_asset_per_base_asset
+    nullable: false
+    canonical_field: source_price
+    transformation: preserve_decimal_string
+    normalized_unit: USDT_per_BTC
+    validation_rules: [non_negative]
+    known_limitations:
+      - "Order price is not bankruptcy price and is not selected as execution ground truth."
+
+  - source_field: o.ap
+    semantic_meaning: average_price
+    source_unit: quote_asset_per_base_asset
+    nullable: false
+    canonical_field: average_fill_price
+    transformation: preserve_decimal_string
+    normalized_unit: USDT_per_BTC
+    validation_rules: [non_negative]
+
+  - source_field: o.X
+    semantic_meaning: order_status
+    source_unit: string
+    nullable: false
+    canonical_field: order_status
+    transformation: preserve
+    normalized_unit: string
+
+  - source_field: o.l
+    semantic_meaning: order_last_filled_quantity
+    source_unit: base_asset_for_BTCUSDT_USDM
+    nullable: false
+    canonical_field: last_filled_quantity
+    transformation: preserve_decimal_string
+    normalized_unit: BTC
+    validation_rules: [non_negative]
+    known_limitations:
+      - "Last-filled quantity is not asserted to equal true liquidation volume."
+
+  - source_field: o.z
+    semantic_meaning: order_filled_accumulated_quantity
+    source_unit: base_asset_for_BTCUSDT_USDM
+    nullable: false
+    canonical_field: accumulated_filled_quantity
+    transformation: preserve_decimal_string
+    normalized_unit: BTC
+    validation_rules: [non_negative]
+    known_limitations:
+      - "Accumulated-filled quantity is not asserted to equal true liquidation volume."
+
+  - source_field: o.T
+    semantic_meaning: order_trade_time
+    source_unit: epoch_ms
+    timestamp_meaning: order_trade_time
+    nullable: false
+    canonical_field: event_time
+    transformation: epoch_ms_to_utc
+    normalized_unit: UTC
+
+known_limitations:
+  - "The public stream is source-incomplete by design: at most one selected observation per symbol per 1000ms."
+  - "Official current API reference and changelog conflict on whether the selected observation is latest or largest."
+  - "The stream cannot be used as ground truth for true event count, complete cascade reconstruction, or complete liquidation volume."
+  - "No native event or sequence ID is exposed; only exact raw-envelope replay dedup is guaranteed."
+  - "GET /fapi/v1/forceOrders is USER_DATA account history and cannot backfill the public market stream."
+  - "No verified public historical USD-M liquidation bootstrap source was found in documented/tested official locations."
+  - "Local capture completeness depends on connection uptime; source-selection incompleteness is distinct from local gaps."
