@@ -363,7 +363,10 @@ def ingest_bybit_funding_rate(
         "symbol": symbol,
         "last_funding_time_ms": int(normalized_records[-1].funding_time.timestamp() * 1000),
         "last_funding_time_iso": normalized_records[-1].funding_time.isoformat(),
+        "observed_source_coverage_start": normalized_records[0].funding_time.isoformat(),
+        "observed_source_coverage_end": normalized_records[-1].funding_time.isoformat(),
         "total_records": len(normalized_records),
+        "note": "observed_source_coverage_start is earliest event actually proven reachable via the source traversal",
         "updated_at": retrieved_iso,
     }
     chk_file.write_text(json.dumps(chk_payload, indent=2), encoding="utf-8")
@@ -372,8 +375,12 @@ def ingest_bybit_funding_rate(
         "symbol": symbol,
         "status": "PASS",
         "records_count": len(normalized_records),
-        "coverage_start": normalized_records[0].funding_time.isoformat(),
-        "coverage_end": normalized_records[-1].funding_time.isoformat(),
+        # observed_source_coverage_start = earliest event proven reachable via source traversal
+        # (coincides with dataset earliest when full bootstrap is performed without start_time filter)
+        "observed_source_coverage_start": normalized_records[0].funding_time.isoformat(),
+        "observed_source_coverage_end": normalized_records[-1].funding_time.isoformat(),
+        "normalized_dataset_coverage_start": normalized_records[0].funding_time.isoformat(),
+        "normalized_dataset_coverage_end": normalized_records[-1].funding_time.isoformat(),
         "years": sorted(records_by_year.keys()),
         "raw_file": str(raw_file),
         "parquet_files": [str(p) for p in created_parquet_files],

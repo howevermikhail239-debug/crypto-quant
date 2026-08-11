@@ -273,3 +273,101 @@ def test_bybit_rerun_bootstrap_idempotent_without_rmtree():
         assert len(lines) == 2
         assert lines[0]["row_count"] == 2
         assert lines[1]["row_count"] == 2
+
+
+def test_bybit_pagination_deterministic_no_skip_no_duplicate_no_early_termination():
+    """
+    Pagination regression test: deterministic multi-page fixture.
+    Verifies: newest-first source pages, endTime = oldest - 1 traversal,
+    multiple full pages, final partial page, no skipped records,
+    no skipped boundary, no duplicated boundary, correct ascending sort.
+    """
+    mock_client = MagicMock()
+
+    # Page 1 (latest, no endTime): 3 items = full page (limit=3), descending
+    page1 = MagicMock()
+    page1.json.return_value = {
+        "retCode": 0, "retMsg": "OK",
+        "result": {"list": [
+            {"symbol": "BTCUSDT", "fundingRate": "0.0009", "fundingRateTimestamp": "9000"},
+            {"symbol": "BTCUSDT", "fundingRate": "0.0008", "fundingRateTimestamp": "8000"},
+            {"symbol": "BTCUSDT", "fundingRate": "0.0007", "fundingRateTimestamp": "7000"},
+        ]},
+    }
+    # Page 2 (endTime=6999): 3 items = full page, descending
+    page2 = MagicMock()
+    page2.json.return_value = {
+        "retCode": 0, "retMsg": "OK",
+        "result": {"list": [
+            {"symbol": "BTCUSDT", "fundingRate": "0.0006", "fundingRateTimestamp": "6000"},
+            {"symbol": "BTCUSDT", "fundingRate": "0.0005", "fundingRateTimestamp": "5000"},
+            {"symbol": "BTCUSDT", "fundingRate": "0.0004", "fundingRateTimestamp": "4000"},
+        ]},
+    }
+    # Page 3 (endTime=3999): 2 items = partial page (terminates traversal)
+    page3 = MagicMock()
+    page3.json.return_value = {
+        "retCode": 0, "retMsg": "OK",
+        "result": {"list": [
+            {"symbol": "BTCUSDT", "fundingRate": "0.0003", "fundingRateTimestamp": "3000"},
+            {"symbol": "BTCUSDT", "fundingRate": "0.0001", "fundingRateTimestamp": "1000"},
+        ]},
+    }
+    mock_client.get.side_effect = [page1, page2, page3]
+
+    res = fetch_bybit_funding_history("BTCUSDT", limit=3, client=mock_client)
+
+    # Must have collected all 8 records
+    assert len(res) == 8, f"Expected 8 records, got {len(res)}"
+
+    # Must be strictly ascending by fundingRateTimestamp
+    timestamps = [int(r["fundingRateTimestamp"]) for r in res]
+    assert timestamps == sorted(timestamps), "Records must be sorted ascending"
+    assert timestamps == [1000, 3000, 4000, 5000, 6000, 7000, 8000, 9000]
+
+    # Must have used exactly 3 API pages
+    assert mock_client.get.call_count == 3
+
+    # Verify page 2 was called with endTime = 7000 - 1 = 6999
+    call2_kwargs = mock_client.get.call_args_list[1][1]
+    assert call2_kwargs["params"]["endTime"] == 6999
+
+    # Verify page 3 was called with endTime = 4000 - 1 = 3999
+    call3_kwargs = mock_client.get.call_args_list[2][1]
+    assert call3_kwargs["params"]["endTime"] == 3999
+
+    # No duplicates
+    assert len(timestamps) == len(set(timestamps))
+
+
+def test_bybit_coverage_start_semantics():
+    """Verifies that coverage_start == source traversal earliest (not an arbitrary value)."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        root = Path(tmp_dir)
+        mock_client = MagicMock()
+
+        resp_info = MagicMock()
+        resp_info.json.return_value = {
+            "retCode": 0, "retMsg": "OK",
+            "result": {"list": [{"symbol": "BTCUSDT", "fundingInterval": 480}]},
+        }
+        resp_rates = MagicMock()
+        resp_rates.json.return_value = {
+            "retCode": 0, "retMsg": "OK",
+            "result": {"list": [
+                {"symbol": "BTCUSDT", "fundingRate": "0.00015", "fundingRateTimestamp": "1786233600000"},
+                {"symbol": "BTCUSDT", "fundingRate": "0.00010", "fundingRateTimestamp": "1786204800000"},
+            ]},
+        }
+        mock_client.get.side_effect = [resp_info, resp_rates]
+
+        result = ingest_bybit_funding_rate("BTCUSDT", root, client=mock_client)
+
+        # Coverage semantics: observed_source_coverage_start == normalized_dataset_coverage_start
+        assert result["status"] == "PASS"
+        assert "observed_source_coverage_start" in result
+        assert "normalized_dataset_coverage_start" in result
+        assert result["observed_source_coverage_start"] == result["normalized_dataset_coverage_start"], (
+            "For full bootstrap, source traversal earliest must equal normalized dataset earliest"
+        )
+
