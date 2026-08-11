@@ -1,0 +1,28 @@
+contract_id: bybit.linear.rest.funding-rate.v1
+source_dataset_id: bybit.linear.funding_rate.rest
+exchange: bybit
+market_type: perpetual
+contract_type: linear_perpetual
+source_kind: rest
+official_documentation_url: https://bybit-exchange.github.io/docs/v5/market/history-fund-rate
+verified_at: "2026-08-11T00:00:00Z"
+schema_version: 1.0.0
+request_rules:
+  endpoint: /v5/market/funding/history
+  method: GET
+  mandatory_params:
+    category: linear
+    symbol: explicit_symbol
+  limit_max: 200
+  traversal: "descending from latest, paginate backwards via endTime = min_ts_in_batch - 1ms, then normalize ascending"
+  timestamp_unit: ms
+  boundary_semantics: "startTime-only request is invalid per Bybit API; endTime traverses history"
+fields:
+  - {source_field: symbol, semantic_meaning: contract_symbol, source_unit: string, nullable: false, canonical_field: symbol, transformation: exact_match, normalized_unit: symbol}
+  - {source_field: fundingRate, semantic_meaning: realized_funding_rate_fraction, source_unit: decimal_fraction, nullable: false, canonical_field: funding_rate, transformation: string_to_decimal_raw_fraction, normalized_unit: decimal_fraction}
+  - {source_field: fundingRateTimestamp, semantic_meaning: settlement_time, source_unit: epoch_ms, nullable: false, canonical_field: funding_time, transformation: epoch_ms_to_utc, normalized_unit: UTC}
+known_limitations:
+  - "Bybit funding history does NOT provide markPrice; canonical mark_price is null (no silent enrichment)."
+  - "Bybit funding history does NOT provide rateType; canonical source_rate_type is null and canonical_rate_type is 'NOT_PROVIDED'."
+  - "Historical knowledge_time is unknown; settlement timestamp is not guaranteed instantaneous market availability."
+  - "Historical configured fundingInterval is read from instruments-info snapshot and must never be backfilled historically."
