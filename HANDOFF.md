@@ -23,11 +23,13 @@
 
 ## C. CURRENT GIT STATE
 - **Branch:** master
-- **HEAD:** 735544c
+- **HEAD:** 302b8d7
 - **Working Tree:** clean (after this handoff commit)
-- **Test Count:** 210 passed
+- **Test Count:** 215 passed
 
 **Latest important commits:**
+- `302b8d7` — Phase 1D.3B independent acceptance
+- `34d52ea` — Bybit ETHUSDT liquidation parity
 - `735544c` — Phase 1D.3A final semantic closure
 - `79fffb0` — Phase 1D.3A acceptance: source contract / dedup / quarantine
 - `e8e679d` — initial Bybit BTCUSDT liquidation pilot
@@ -42,9 +44,10 @@
 - PHASE 1D.1 (Funding): **FINAL DONE**
 - PHASE 1D.2 (Open Interest): **FINAL DONE / ACCEPTED**
 - PHASE 1D.3A (Bybit Linear BTCUSDT Liquidations): **FINAL DONE / ACCEPTED**
+- PHASE 1D.3B (Bybit Linear ETHUSDT Liquidations): **FINAL DONE / ACCEPTED**
 
 **Next Authorized Step (and ONLY step allowed next):**
-- **PHASE 1D.3B**: Bybit Linear ETHUSDT Liquidations Parity
+- **PHASE 1D.3C**: Binance USD-M BTCUSDT Liquidations
 
 ## E. DATA LOCATIONS
 - **Repository:** `C:\Users\Admin\Documents\ChatGPT\анализ крипты`
@@ -132,21 +135,21 @@ Until a verified source exists, missed realtime WS events are UNRECOVERABLE / UN
 - **CRITICAL IMPERATIVE:** DO NOT IMPLEMENT STRATEGY ENGINE NOW. This is purely an architectural reservation.
 
 ## N. NEXT TASK FOR CODEX
-**NEXT: PHASE 1D.3B — Bybit Linear ETHUSDT Liquidations Parity**
-- **Main Goal:** Prove existing Bybit adapter is instrument-generic and remove/prove any BTC-specific assumptions.
+**NEXT: PHASE 1D.3C — Binance USD-M BTCUSDT Liquidations**
+- **Main Goal:** Implement a source-contract-first, symbol-specific Binance USD-M BTCUSDT liquidation vertical slice without importing Bybit completeness or field semantics.
 - **Checklist:**
-  - ETH base/quote/settle
-  - ETH quantity semantics
-  - generic source contract applicability
-  - no BTC hardcoding
-  - BTC/ETH isolation
-  - cross-symbol dedup isolation
+  - current official WebSocket routing and migration evidence
+  - latest-versus-largest 1000 ms selection conflict
+  - public stream versus private USER_DATA history separation
+  - precise q/l/z, p/ap, E/T and side semantics
+  - canonical Binance USD-M BTC identity
+  - source-selection incompleteness as first-class DQ
   - wrong-symbol fail-closed
   - immutable raw
   - immutable normalized generations
-  - manifest/checkpoint isolation
-  - bounded ETH WebSocket transport test
-- **Do not create a separate ETH collector.** Adapt the existing generic pipeline.
+  - manifest/checkpoint lineage
+  - bounded BTC WebSocket transport test
+- **Do not start Binance ETHUSDT, long soak, features, signals, strategies, or general refactoring.**
 
 ## O. VALIDATION COMMANDS FOR NEXT AGENT
 Run these exactly as specified:
