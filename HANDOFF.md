@@ -23,11 +23,12 @@
 
 ## C. CURRENT GIT STATE
 - **Branch:** master
-- **HEAD:** `137ef3953704ed930034d9b44157d432d6bffaa2` (PHASE 1D.3C acceptance commit; this HANDOFF update follows as docs-only)
+- **HEAD:** `b57e039d2a40a8d3f1fd772e80f6dff8e5df07cc` (accepted PHASE 1D.3D implementation; this HANDOFF update follows as docs-only)
 - **Working Tree:** clean (after this handoff commit)
-- **Test Count:** 231 passed
+- **Test Count:** 237 passed
 
 **Latest important commits:**
+- `b57e039` — Phase 1D.3D Binance USD-M ETHUSDT liquidation parity (accepted)
 - `137ef39` — Phase 1D.3C independent acceptance: Binance liquidation provenance and completeness
 - `5abcfae` — Phase 1D.3C Binance USD-M BTCUSDT liquidation pilot
 - `302b8d7` — Phase 1D.3B independent acceptance
@@ -48,15 +49,16 @@
 - PHASE 1D.3A (Bybit Linear BTCUSDT Liquidations): **FINAL DONE / ACCEPTED**
 - PHASE 1D.3B (Bybit Linear ETHUSDT Liquidations): **FINAL DONE / ACCEPTED**
 - PHASE 1D.3C (Binance USD-M BTCUSDT Liquidations): **FINAL DONE / ACCEPTED**
+- PHASE 1D.3D (Binance USD-M ETHUSDT Liquidations Parity): **FINAL DONE / ACCEPTED**
 
 **Next Authorized Step (and ONLY step allowed next):**
-- **PHASE 1D.3D**: Binance USD-M ETHUSDT Liquidations Parity
+- **PHASE 1D.3F**: Liquidation soak, gap tracking and source/local completeness DQ
 
 ## E. DATA LOCATIONS
 - **Repository:** `C:\Users\Admin\Documents\ChatGPT\анализ крипты`
 - **External market/control data:** `C:\crypto_quant_data` (Not in Git)
 - **Evidence for liquidation source/archive audit:** `C:\crypto_quant_data\evidence\phase1d3_audit`
-- **Evidence Index:** `phase1d3_audit_evidence_index.json` (27 artifacts, 27/27 hash-valid; 25 accepted evidence artifacts and 2 preserved invalid empty WAF-challenge responses)
+- **Evidence Index:** `phase1d3_audit_evidence_index.json` (28 artifacts, 28/28 hash-valid; includes the exact derived ETHUSDT metadata record)
 
 ## F. CRITICAL GLOBAL INVARIANTS
 - UTC canonical storage
@@ -123,6 +125,16 @@
 - **Genuine event:** one BTC observation captured; raw/Parquet/manifest/checkpoint lineage independently reconciled
 - **Production invariant:** active genuine BTC rows = 1; active synthetic rows = 0
 
+## I.2 BINANCE LIQUIDATIONS 1D.3D ACCEPTED PARITY
+- **Accepted implementation:** `b57e039d2a40a8d3f1fd772e80f6dff8e5df07cc`
+- **Shared adapter/contract:** the same Binance USD-M liquidation adapter and `binance.usdm.ws.liquidation-order.v1` serve BTCUSDT and ETHUSDT.
+- **ETH identity:** `ins_13dce2c0972bec4044d9`; Binance/perpetual/linear-perpetual/ETH/USDT/USDT.
+- **ETH units:** q/l/z resolve through canonical `identity.quantity_unit=ETH`; no symbol-specific unit branch.
+- **Isolation:** wrong-symbol/topic mismatch fail closed; raw, normalized, manifest and checkpoint identities are symbol-scoped; cross-symbol exact-wire dedup collision is prevented.
+- **Live transport:** connection, SUBSCRIBE ACK, heartbeat and bounded termination verified for `ethusdt@forceOrder`.
+- **Genuine ETH event:** NOT YET OBSERVED / DEFERRED; no fake ETH market state or checkpoint was created.
+- **BTC immutability:** accepted genuine BTC raw and Parquet hashes remained byte-identical through parity and acceptance.
+
 ## J. SYNTHETIC CONTAMINATION HISTORY
 - During early 1D.3A, a synthetic test batch was accidentally written to `C:\crypto_quant_data`.
 - It was quarantined with audit trail preserved.
@@ -138,6 +150,7 @@ Until a verified source exists, missed realtime WS events are UNRECOVERABLE / UN
 ## L. REAL LIVE EVENT STATUS
 - Bybit bounded WebSocket tests proved connection, subscription ACK, heartbeat ping/pong and quiet-period liveness; no genuine Bybit liquidation was observed in the short accepted windows.
 - Binance USD-M BTCUSDT bounded Market WebSocket pilot captured and persisted one genuine liquidation observation.
+- Binance USD-M ETHUSDT bounded Market WebSocket pilot verified transport/subscription/heartbeat; no genuine ETH event was observed, which is not an acceptance blocker.
 - Genuine Binance BTC raw → normalized → manifest → checkpoint lineage is accepted; raw and Parquet hashes independently reconciled.
 - Binance source completeness remains `INCOMPLETE_THROTTLED_SNAPSHOT`, selection rule `DOC_CONFLICT_LATEST_VS_LARGEST`.
 - PHASE 1D.3F remains responsible for longer soak, gaps, local completeness/DQ and cross-source operational behavior. Do not run infinite market-event waits now.
@@ -153,20 +166,10 @@ Until a verified source exists, missed realtime WS events are UNRECOVERABLE / UN
 - **CRITICAL IMPERATIVE:** DO NOT IMPLEMENT STRATEGY ENGINE NOW. This is purely an architectural reservation.
 
 ## N. NEXT TASK FOR CODEX
-**NEXT: PHASE 1D.3D — Binance USD-M ETHUSDT Liquidations Parity**
-- **Main Goal:** Extend the accepted source-contract-first Binance USD-M liquidation semantics to ETHUSDT as a separate canonical instrument without changing the accepted BTC generation or importing Bybit semantics.
-- **Checklist:**
-  - preserve documented `REQUEST_SUBSCRIBE` Market routing
-  - preserve `DOC_CONFLICT_LATEST_VS_LARGEST` and 1000 ms source incompleteness
-  - canonical Binance USD-M ETHUSDT identity distinct from BTC/Bybit/Spot
-  - prove ETH q/l/z base-unit mapping from current metadata/contract evidence
-  - preserve q/l/z, p/ap, E/T and conservative side semantics
-  - wrong-symbol fail-closed
-  - immutable raw
-  - immutable normalized generations
-  - manifest/checkpoint lineage
-  - bounded ETH WebSocket transport test; zero events remains an acceptable bounded outcome
-- **Do not start all-market streams, long soak, features, signals, strategies, or general refactoring.**
+**NEXT: PHASE 1D.3F — Liquidation Soak / Gaps / Source-Local Completeness DQ**
+- **Main Goal:** Run the next explicitly reserved liquidation operational-quality slice across the already accepted BTC/ETH Binance/Bybit collectors, keeping each venue's fundamentally different source completeness semantics separate.
+- **First gate:** define bounded soak scope, gap taxonomy, liveness/freshness evidence and acceptance thresholds before starting collectors.
+- **Do not add liquidation features, cross-exchange economic quantity comparisons, signals, strategies, models, Telegram, execution, or all-market architecture without a separate approved contract.**
 
 ## O. VALIDATION COMMANDS FOR NEXT AGENT
 Run these exactly as specified:
