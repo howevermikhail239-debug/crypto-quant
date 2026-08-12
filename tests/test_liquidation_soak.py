@@ -98,6 +98,27 @@ def test_quiet_bounded_run_is_not_a_gap_or_failure(tmp_path: Path):
     assert GapRegistry(tmp_path).list_gaps() == []
 
 
+def test_missing_subscription_ack_cannot_produce_pass(tmp_path: Path):
+    async def missing_ack(spec, root, duration, flush, disk, run_id, session_id):
+        outcome = _outcome(spec, run_id, session_id)
+        outcome.pop("subscription_status")
+        return outcome
+
+    report = asyncio.run(
+        run_liquidation_soak(
+            tmp_path,
+            config=_config(),
+            streams=default_streams()[:1],
+            attempt_runner=missing_ack,
+            run_id="liq_soak_missing_ack",
+        )
+    )
+    result = report["stream_results"]["bybit:BTCUSDT"]
+    assert report["status"] == "PARTIAL_SOAK"
+    assert result["subscription_acks"] == 0
+    assert result["subscription_status"] == "FAIL"
+
+
 def test_disconnect_reconnect_records_unrecoverable_local_gap(tmp_path: Path):
     calls = 0
 
@@ -121,6 +142,8 @@ def test_disconnect_reconnect_records_unrecoverable_local_gap(tmp_path: Path):
     assert result["connection_attempts"] == 2
     assert result["disconnects"] == result["reconnects"] == 1
     assert result["local_capture_status"] == LOCAL_GAPPED
+    assert result["raw_message_count"] == 1
+    assert result["source_event_count"] == result["persisted_row_count"] == 2
     gaps = GapRegistry(tmp_path).list_gaps()
     assert len(gaps) == 1
     assert gaps[0].gap_type == GapType.LOCAL_COLLECTOR_GAP
@@ -128,6 +151,80 @@ def test_disconnect_reconnect_records_unrecoverable_local_gap(tmp_path: Path):
     assert gaps[0].coverage_proven is False
     assert gaps[0].recovery_attempted is False
     assert gaps[0].session_before != gaps[0].session_after
+
+
+def test_production_bybit_collector_reconnects_resubscribes_and_preserves_buffer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    payload, wire = _bybit_message()
+    sent: list[dict[str, Any]] = []
+    connection_number = 0
+
+    class MockWebSocket:
+        def __init__(self, first: bool):
+            self.first = first
+            self.queue = [json.dumps({"success": True, "op": "subscribe"})]
+            if first:
+                self.queue.append(wire)
+
+        async def send(self, value):
+            sent.append(json.loads(value))
+
+        async def recv(self):
+            if self.queue:
+                return self.queue.pop(0)
+            if self.first:
+                raise ConnectionError("controlled disconnect after received frame")
+            await asyncio.sleep(10)
+
+    class Context:
+        def __init__(self, websocket):
+            self.websocket = websocket
+
+        async def __aenter__(self):
+            return self.websocket
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    def connect(*args, **kwargs):
+        nonlocal connection_number
+        connection_number += 1
+        return Context(MockWebSocket(first=connection_number == 1))
+
+    import websockets
+
+    monkeypatch.setattr(websockets, "connect", connect)
+    config = SoakConfig(
+        duration_seconds=1.2,
+        flush_interval_seconds=60,
+        min_disk_free_gb=0,
+        reconnect=ReconnectConfig(
+            initial_delay_sec=0.01,
+            max_delay_sec=0.01,
+            jitter_ratio=0,
+            max_attempts=2,
+        ),
+    )
+    report = asyncio.run(
+        run_liquidation_soak(
+            tmp_path,
+            config=config,
+            streams=default_streams()[:1],
+            run_id="liq_soak_production_reconnect",
+        )
+    )
+    result = report["stream_results"]["bybit:BTCUSDT"]
+    assert connection_number == 2
+    assert sent == [
+        {"op": "subscribe", "args": ["allLiquidation.BTCUSDT"]},
+        {"op": "subscribe", "args": ["allLiquidation.BTCUSDT"]},
+    ]
+    assert result["transport_status"] == result["subscription_status"] == "PASS"
+    assert result["disconnects"] == result["reconnects"] == 1
+    assert result["local_capture_status"] == LOCAL_GAPPED
+    parquet = list((tmp_path / "normalized").rglob("*.parquet"))
+    assert len(parquet) == 1 and pq.ParquetFile(parquet[0]).metadata.num_rows == 2
 
 
 def test_wrong_symbol_is_machine_readable_incident_not_interval_gap(tmp_path: Path):
@@ -337,6 +434,16 @@ def test_normalized_before_checkpoint_failure_is_retry_safe(
 
 def test_run_manifest_reconciliation_verifies_refs_and_hashes(tmp_path: Path):
     payload, wire = _bybit_message()
+    report_path = (
+        tmp_path
+        / "control"
+        / "ingestion_runs"
+        / "liquidation_soak"
+        / "v1"
+        / "liq_soak_reconcile.json"
+    )
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text("{}\n", encoding="utf-8")
     bybit_liq.persist_bybit_liquidation_batch(
         [(payload, wire)],
         "BTCUSDT",
@@ -351,3 +458,9 @@ def test_run_manifest_reconciliation_verifies_refs_and_hashes(tmp_path: Path):
     assert result["raw_message_count"] == 1
     assert result["expected_canonical_observations"] == 2
     assert result["broken_refs"] == []
+
+
+def test_run_manifest_reconciliation_rejects_missing_run_report(tmp_path: Path):
+    result = reconcile_liquidation_run(tmp_path, "missing_run")
+    assert result["status"] == "FAIL"
+    assert result["reason"] == "RUN_REPORT_NOT_FOUND"

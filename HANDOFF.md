@@ -24,12 +24,14 @@
 ## C. CURRENT GIT STATE
 - **Branch:** master
 - **Parent HEAD before PHASE 1D.3F:** `db01156732b9846d1091ea02c218c6b494fe3076`
-- **HEAD after implementation:** commit titled `Phase 1D.3F: liquidation soak, gaps and source-local DQ`
-- **Working Tree:** clean after the PHASE 1D.3F commit
-- **Test Count:** 250 passed
+- **Accepted implementation candidate:** `12162e417ae63bb30d4d38204b54686ac24534e4`
+- **HEAD after audit:** the commit containing `docs/phase1d3f-acceptance-report.md`
+- **Working Tree:** clean after the independent acceptance commit
+- **Test Count:** 255 passed
 
 **Latest important commits:**
-- `HEAD` — Phase 1D.3F liquidation soak, gaps and source-local DQ (awaiting independent acceptance)
+- `HEAD` — independent acceptance of Phase 1D.3F, including four defect fixes and regression evidence
+- `12162e4` — Phase 1D.3F implementation candidate
 - `b57e039` — Phase 1D.3D Binance USD-M ETHUSDT liquidation parity (accepted)
 - `137ef39` — Phase 1D.3C independent acceptance: Binance liquidation provenance and completeness
 - `5abcfae` — Phase 1D.3C Binance USD-M BTCUSDT liquidation pilot
@@ -52,10 +54,10 @@
 - PHASE 1D.3B (Bybit Linear ETHUSDT Liquidations): **FINAL DONE / ACCEPTED**
 - PHASE 1D.3C (Binance USD-M BTCUSDT Liquidations): **FINAL DONE / ACCEPTED**
 - PHASE 1D.3D (Binance USD-M ETHUSDT Liquidations Parity): **FINAL DONE / ACCEPTED**
-- PHASE 1D.3F (Liquidation Soak / Gaps / Source-Local DQ): **IMPLEMENTED / READY FOR INDEPENDENT ACCEPTANCE**
+- PHASE 1D.3F (Liquidation Soak / Gaps / Source-Local DQ): **FINAL DONE / ACCEPTED**
 
-**Next Authorized Step (and ONLY step allowed next):**
-- independent acceptance audit of **PHASE 1D.3F**; do not start a later phase
+**Next Authorized Step:**
+- no later phase was started by this audit; require explicit user authorization and the governing phase gate before continuing
 
 ## E. DATA LOCATIONS
 - **Repository:** `C:\Users\Admin\Documents\ChatGPT\анализ крипты`
@@ -168,12 +170,14 @@ Until a verified source exists, missed realtime WS events are UNRECOVERABLE / UN
 - **Control:** Architecturally unlimited does NOT mean statistically uncontrolled search. Multiple testing will be controlled by an Experiment Registry later.
 - **CRITICAL IMPERATIVE:** DO NOT IMPLEMENT STRATEGY ENGINE NOW. This is purely an architectural reservation.
 
-## N. NEXT TASK FOR CODEX
-**NEXT: independent acceptance audit of PHASE 1D.3F.**
+## N. CURRENT ACCEPTED CHECKPOINT
+**PHASE 1D.3F — FINAL DONE / ACCEPTED.**
 
-Implementation evidence: `docs/phase1d3f-liquidation-soak-dq-report.md`.
-- **Implementation state:** bounded four-stream soak, source-local gap semantics, deterministic reconnect/failure gates, reconciliation, and data-root audit are complete; independent review is now required.
-- **Acceptance gate:** verify the implementation report, committed tests, external run record `liq_soak_96d04877a3d64202807ac752e8976208`, and immutable artifact hashes before accepting.
+- Implementation evidence: `docs/phase1d3f-liquidation-soak-dq-report.md`.
+- Independent evidence and defect record: `docs/phase1d3f-acceptance-report.md`.
+- Accepted external run: `liq_soak_96d04877a3d64202807ac752e8976208`.
+- Audit fixes: explicit ACK evidence, durable flush on disconnect, fail-closed Bybit side semantics, and rejection of nonexistent run reconciliation.
+- Final validation: 255 tests PASS; Ruff/config/lock/data-root audit PASS.
 - **Do not add liquidation features, cross-exchange economic quantity comparisons, signals, strategies, models, Telegram, execution, or all-market architecture without a separate approved contract.**
 
 ## O. VALIDATION COMMANDS FOR NEXT AGENT

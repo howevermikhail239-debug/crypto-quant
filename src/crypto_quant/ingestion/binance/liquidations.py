@@ -858,7 +858,36 @@ async def collect_binance_liquidations_live(
             remaining = ack_deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("Binance WebSocket subscription acknowledgement timed out")
-            raw_ack = await asyncio.wait_for(websocket.recv(), timeout=remaining)
+            try:
+                raw_ack = await asyncio.wait_for(websocket.recv(), timeout=remaining)
+            except Exception as receive_error:
+                if buffered:
+                    try:
+                        persisted = persist_binance_liquidation_batch(
+                            buffered,
+                            root,
+                            symbol=symbol,
+                            min_disk_free_gb=min_disk_free_gb,
+                            ingestion_run_id=ingestion_run_id,
+                            session_id=session_id,
+                        )
+                        receive_error.liquidation_persisted_buffer = {
+                                "raw_message_count": len(buffered),
+                                "source_event_count": len(buffered),
+                                "persisted_row_count": persisted.get("new_rows_persisted", 0),
+                                "wire_sha256_seen": [
+                                    hashlib.sha256(raw.encode()).hexdigest()
+                                    for _, raw, _ in buffered
+                                ],
+                                "first_event_time": persisted.get(
+                                    "observed_source_coverage_start"
+                                ),
+                                "last_event_time": persisted.get("observed_source_coverage_end"),
+                            }
+                    except Exception as persistence_error:
+                        _quarantine_failed_live_buffer(root, symbol, buffered, persistence_error)
+                        raise persistence_error from receive_error
+                raise
             ack_received = utc_now()
             ack = json.loads(raw_ack)
             if ack.get("id") == 1:
@@ -893,6 +922,34 @@ async def collect_binance_liquidations_live(
                     wire_sha256_seen.append(hashlib.sha256(raw_text.encode()).hexdigest())
             except TimeoutError:
                 pass
+            except Exception as receive_error:
+                if buffered:
+                    try:
+                        persisted = persist_binance_liquidation_batch(
+                            buffered,
+                            root,
+                            symbol=symbol,
+                            min_disk_free_gb=min_disk_free_gb,
+                            ingestion_run_id=ingestion_run_id,
+                            session_id=session_id,
+                        )
+                        receive_error.liquidation_persisted_buffer = {
+                                "raw_message_count": len(buffered),
+                                "source_event_count": len(buffered),
+                                "persisted_row_count": persisted.get("new_rows_persisted", 0),
+                                "wire_sha256_seen": [
+                                    hashlib.sha256(raw.encode()).hexdigest()
+                                    for _, raw, _ in buffered
+                                ],
+                                "first_event_time": persisted.get(
+                                    "observed_source_coverage_start"
+                                ),
+                                "last_event_time": persisted.get("observed_source_coverage_end"),
+                            }
+                    except Exception as persistence_error:
+                        _quarantine_failed_live_buffer(root, symbol, buffered, persistence_error)
+                        raise persistence_error from receive_error
+                raise
 
             now = time.monotonic()
             if buffered and (now - last_flush >= flush_interval_seconds or len(buffered) >= 50):

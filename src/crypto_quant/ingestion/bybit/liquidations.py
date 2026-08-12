@@ -269,7 +269,7 @@ def parse_bybit_liquidation_message(
         elif raw_side_str == "Sell":
             pos_side = "SHORT"
         else:
-            pos_side = "UNKNOWN"
+            raise ValueError(f"Unsupported liquidation side: {raw_side_str!r}")
 
         raw_size = item.get("v")
         if raw_size is None or str(raw_size).strip() == "":
@@ -918,6 +918,40 @@ async def collect_bybit_liquidations_live(
                     wire_sha256_seen.append(hashlib.sha256(msg_str.encode()).hexdigest())
             except TimeoutError:
                 pass
+            except Exception as receive_error:
+                if buffered_raw_messages:
+                    try:
+                        persisted = persist_bybit_liquidation_batch(
+                            buffered_raw_messages,
+                            symbol=symbol,
+                            root=root,
+                            received_at=utc_now(),
+                            min_disk_free_gb=min_disk_free_gb,
+                            ingestion_run_id=ingestion_run_id,
+                            session_id=session_id,
+                        )
+                        receive_error.liquidation_persisted_buffer = {
+                                "raw_message_count": len(buffered_raw_messages),
+                                "source_event_count": sum(
+                                    len(message.get("data", []))
+                                    for message, _ in buffered_raw_messages
+                                ),
+                                "persisted_row_count": persisted.get("new_rows_persisted", 0),
+                                "wire_sha256_seen": [
+                                    hashlib.sha256(raw.encode()).hexdigest()
+                                    for _, raw in buffered_raw_messages
+                                ],
+                                "first_event_time": persisted.get(
+                                    "observed_source_coverage_start"
+                                ),
+                                "last_event_time": persisted.get("observed_source_coverage_end"),
+                            }
+                    except Exception as persistence_error:
+                        _quarantine_failed_live_buffer(
+                            root, symbol, buffered_raw_messages, persistence_error
+                        )
+                        raise persistence_error from receive_error
+                raise
 
             # Flush buffer periodically if records exist
             now = time.time()
@@ -976,6 +1010,9 @@ async def collect_bybit_liquidations_live(
         "symbol": symbol,
         "status": "PASS",
         "transport_status": "PASS",
+        "subscription_status": "PASS",
+        "topic": topic,
+        "ws_endpoint": ws_url,
         "event_observation_status": obs_status,
         "total_messages_received": total_messages_received,
         "total_source_events_observed": total_source_events_observed,

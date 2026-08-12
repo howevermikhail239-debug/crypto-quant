@@ -346,7 +346,7 @@ async def _run_stream(
             )
             ended_at = datetime.fromisoformat(outcome.get("ended_at", utc_now().isoformat()))
             totals["successful_connects"] += int(outcome.get("transport_status") == "PASS")
-            totals["subscription_acks"] += int(outcome.get("subscription_status", "PASS") == "PASS")
+            totals["subscription_acks"] += int(outcome.get("subscription_status") == "PASS")
             totals["raw_message_count"] += int(outcome.get("total_messages_received", 0))
             event_count = int(
                 outcome.get(
@@ -415,6 +415,17 @@ async def _run_stream(
         except asyncio.CancelledError:
             raise
         except Exception as error:  # isolated stream failure is recorded, then bounded retry
+            persisted_buffer = getattr(error, "liquidation_persisted_buffer", None)
+            if persisted_buffer:
+                totals["raw_message_count"] += int(persisted_buffer["raw_message_count"])
+                totals["source_event_count"] += int(persisted_buffer["source_event_count"])
+                totals["persisted_row_count"] += int(persisted_buffer["persisted_row_count"])
+                for wire_hash in persisted_buffer["wire_sha256_seen"]:
+                    if wire_hash in wire_hashes_seen:
+                        totals["duplicate_exact_wire_deliveries"] += 1
+                    wire_hashes_seen.add(wire_hash)
+                first_event_time = first_event_time or persisted_buffer.get("first_event_time")
+                last_event_time = persisted_buffer.get("last_event_time") or last_event_time
             failed_at = utc_now()
             reason_code, parser_rejects, wrong_symbol_rejects = _classify_failure(error)
             totals["disconnects"] += 1
@@ -510,6 +521,7 @@ async def _run_stream(
             else "NO_EVENT_OBSERVED_WITHIN_WINDOW"
         ),
         "transport_status": "PASS" if totals["successful_connects"] else "FAIL",
+        "subscription_status": "PASS" if totals["subscription_acks"] else "FAIL",
         "local_capture_status": local_status,
         "row_structural_status": "PASS" if not totals["parser_rejects"] else "DEGRADED",
         "silent_loss_detectability": "NOT_PROVABLE_WITHOUT_RELIABLE_SOURCE_SEQUENCE",
@@ -558,7 +570,10 @@ async def run_liquidation_soak(
         },
         "status": (
             "PASS"
-            if all(result["transport_status"] == "PASS" for result in results)
+            if all(
+                result["transport_status"] == "PASS" and result["subscription_status"] == "PASS"
+                for result in results
+            )
             else "PARTIAL_SOAK"
         ),
     }
@@ -570,6 +585,20 @@ async def run_liquidation_soak(
 
 def reconcile_liquidation_run(root: Path, run_id: str) -> dict[str, Any]:
     """Verify manifest object references and hashes for one instrumented soak run."""
+    run_report = (
+        root / "control" / "ingestion_runs" / "liquidation_soak" / "v1" / f"{run_id}.json"
+    )
+    if not run_report.exists():
+        return {
+            "ingestion_run_id": run_id,
+            "manifest_records": 0,
+            "raw_message_count": 0,
+            "expected_canonical_observations": 0,
+            "hash_valid_records": None,
+            "broken_refs": [],
+            "status": "FAIL",
+            "reason": "RUN_REPORT_NOT_FOUND",
+        }
     rows: list[dict[str, Any]] = []
     for name in ("bybit_linear_liquidations.jsonl", "binance_usdm_liquidations.jsonl"):
         path = root / "control" / "manifests" / name

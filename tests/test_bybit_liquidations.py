@@ -465,6 +465,11 @@ def test_bybit_liquidation_dq_validation_catches_errors():
     recs = parse_bybit_liquidation_message(raw_msg, ident, received_at=recv_t)
     assert len(validate_liquidation_records_dq(recs)) == 0
 
+    invalid_side = dict(raw_msg)
+    invalid_side["data"] = [dict(raw_msg["data"][0], S="Unknown")]
+    with pytest.raises(ValueError, match="Unsupported liquidation side"):
+        parse_bybit_liquidation_message(invalid_side, ident, received_at=recv_t)
+
     # Invalid topic
     with pytest.raises(ValueError, match="Topic mismatch"):
         parse_bybit_liquidation_message({"topic": "allLiquidation.ETHUSDT", "ts": 123, "data": []}, ident, recv_t)
@@ -709,6 +714,7 @@ async def test_collect_bybit_liquidations_live_mocked(monkeypatch):
 
         assert res["status"] == "PASS"
         assert res["transport_status"] == "PASS"
+        assert res["subscription_status"] == "PASS"
         assert res["event_observation_status"] == "REAL_EVENT_OBSERVED"
         assert res["total_messages_received"] == 2
         assert res["total_records_persisted"] == 2
@@ -718,6 +724,52 @@ async def test_collect_bybit_liquidations_live_mocked(monkeypatch):
         assert len(parquet_files) == 1
         tbl = pq.ParquetFile(parquet_files[0]).read()
         assert len(tbl) == 2
+
+
+@pytest.mark.anyio
+async def test_received_bybit_frame_is_persisted_before_disconnect_propagates(
+    monkeypatch, tmp_path: Path
+):
+    from crypto_quant.ingestion.bybit.liquidations import collect_bybit_liquidations_live
+
+    payload = {
+        "topic": "allLiquidation.BTCUSDT",
+        "type": "snapshot",
+        "ts": 1786434825553,
+        "data": [
+            {"T": 1786434825501, "s": "BTCUSDT", "S": "Buy", "v": "0.01", "p": "60000"},
+            {"T": 1786434825502, "s": "BTCUSDT", "S": "Sell", "v": "0.02", "p": "60001"},
+        ],
+    }
+    wire = json.dumps(payload, separators=(",", ":"))
+    queue = [json.dumps({"success": True, "op": "subscribe"}), wire]
+
+    class MockWebSocket:
+        async def send(self, value):
+            return None
+
+        async def recv(self):
+            if queue:
+                return queue.pop(0)
+            raise ConnectionError("controlled disconnect after received frame")
+
+    class Context:
+        async def __aenter__(self):
+            return MockWebSocket()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    import websockets
+
+    monkeypatch.setattr(websockets, "connect", lambda *args, **kwargs: Context())
+    with pytest.raises(ConnectionError, match="controlled disconnect"):
+        await collect_bybit_liquidations_live(
+            "BTCUSDT", tmp_path, flush_interval_seconds=60, max_duration_seconds=5
+        )
+    parquet = list((tmp_path / "normalized").rglob("*.parquet"))
+    assert len(parquet) == 1
+    assert pq.ParquetFile(parquet[0]).metadata.num_rows == 2
 
 
 def test_dedup_guarantee_boundary_cross_envelope_not_guaranteed():

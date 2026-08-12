@@ -567,6 +567,46 @@ async def test_bounded_zero_event_transport_is_not_an_acceptance_blocker(monkeyp
 
 
 @pytest.mark.anyio
+async def test_received_binance_frame_is_persisted_before_disconnect_propagates(
+    monkeypatch, tmp_path: Path
+):
+    payload, wire = _wire(SELL_FIXTURE)
+    queue = [json.dumps({"result": None, "id": 1}), wire]
+
+    class MockWebSocket:
+        async def send(self, value):
+            return None
+
+        async def recv(self):
+            if queue:
+                return queue.pop(0)
+            raise ConnectionError("controlled disconnect after received frame")
+
+        async def ping(self):
+            future = asyncio.get_running_loop().create_future()
+            future.set_result(None)
+            return future
+
+    class Context:
+        async def __aenter__(self):
+            return MockWebSocket()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    import websockets
+
+    monkeypatch.setattr(websockets, "connect", lambda *args, **kwargs: Context())
+    with pytest.raises(ConnectionError, match="controlled disconnect"):
+        await collect_binance_liquidations_live(
+            tmp_path, flush_interval_seconds=60, max_duration_seconds=5
+        )
+    parquet = list((tmp_path / "normalized").rglob("*.parquet"))
+    assert len(parquet) == 1
+    assert pq.ParquetFile(parquet[0]).metadata.num_rows == 1
+
+
+@pytest.mark.anyio
 async def test_eth_topic_btc_payload_mismatch_fails_before_authoritative_write(
     monkeypatch, tmp_path: Path
 ):
