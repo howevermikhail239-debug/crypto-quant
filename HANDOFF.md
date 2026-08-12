@@ -23,11 +23,13 @@
 
 ## C. CURRENT GIT STATE
 - **Branch:** master
-- **HEAD:** `b57e039d2a40a8d3f1fd772e80f6dff8e5df07cc` (accepted PHASE 1D.3D implementation; this HANDOFF update follows as docs-only)
-- **Working Tree:** clean (after this handoff commit)
-- **Test Count:** 237 passed
+- **Parent HEAD before PHASE 1D.3F:** `db01156732b9846d1091ea02c218c6b494fe3076`
+- **HEAD after implementation:** commit titled `Phase 1D.3F: liquidation soak, gaps and source-local DQ`
+- **Working Tree:** clean after the PHASE 1D.3F commit
+- **Test Count:** 250 passed
 
 **Latest important commits:**
+- `HEAD` — Phase 1D.3F liquidation soak, gaps and source-local DQ (awaiting independent acceptance)
 - `b57e039` — Phase 1D.3D Binance USD-M ETHUSDT liquidation parity (accepted)
 - `137ef39` — Phase 1D.3C independent acceptance: Binance liquidation provenance and completeness
 - `5abcfae` — Phase 1D.3C Binance USD-M BTCUSDT liquidation pilot
@@ -50,9 +52,10 @@
 - PHASE 1D.3B (Bybit Linear ETHUSDT Liquidations): **FINAL DONE / ACCEPTED**
 - PHASE 1D.3C (Binance USD-M BTCUSDT Liquidations): **FINAL DONE / ACCEPTED**
 - PHASE 1D.3D (Binance USD-M ETHUSDT Liquidations Parity): **FINAL DONE / ACCEPTED**
+- PHASE 1D.3F (Liquidation Soak / Gaps / Source-Local DQ): **IMPLEMENTED / READY FOR INDEPENDENT ACCEPTANCE**
 
 **Next Authorized Step (and ONLY step allowed next):**
-- **PHASE 1D.3F**: Liquidation soak, gap tracking and source/local completeness DQ
+- independent acceptance audit of **PHASE 1D.3F**; do not start a later phase
 
 ## E. DATA LOCATIONS
 - **Repository:** `C:\Users\Admin\Documents\ChatGPT\анализ крипты`
@@ -166,9 +169,11 @@ Until a verified source exists, missed realtime WS events are UNRECOVERABLE / UN
 - **CRITICAL IMPERATIVE:** DO NOT IMPLEMENT STRATEGY ENGINE NOW. This is purely an architectural reservation.
 
 ## N. NEXT TASK FOR CODEX
-**NEXT: PHASE 1D.3F — Liquidation Soak / Gaps / Source-Local Completeness DQ**
-- **Main Goal:** Run the next explicitly reserved liquidation operational-quality slice across the already accepted BTC/ETH Binance/Bybit collectors, keeping each venue's fundamentally different source completeness semantics separate.
-- **First gate:** define bounded soak scope, gap taxonomy, liveness/freshness evidence and acceptance thresholds before starting collectors.
+**NEXT: independent acceptance audit of PHASE 1D.3F.**
+
+Implementation evidence: `docs/phase1d3f-liquidation-soak-dq-report.md`.
+- **Implementation state:** bounded four-stream soak, source-local gap semantics, deterministic reconnect/failure gates, reconciliation, and data-root audit are complete; independent review is now required.
+- **Acceptance gate:** verify the implementation report, committed tests, external run record `liq_soak_96d04877a3d64202807ac752e8976208`, and immutable artifact hashes before accepting.
 - **Do not add liquidation features, cross-exchange economic quantity comparisons, signals, strategies, models, Telegram, execution, or all-market architecture without a separate approved contract.**
 
 ## O. VALIDATION COMMANDS FOR NEXT AGENT

@@ -369,7 +369,9 @@ def parse_binance_liquidation_message(
     future_tolerance = received_at + timedelta(minutes=5)
     if event_time > future_tolerance or exchange_timestamp > future_tolerance:
         dq_flags.append("SOURCE_CLOCK_SKEW_FUTURE_TIMESTAMP")
-    if Decimal(last_qty) > Decimal(accumulated_qty) or Decimal(accumulated_qty) > Decimal(original_qty):
+    if Decimal(last_qty) > Decimal(accumulated_qty) or Decimal(accumulated_qty) > Decimal(
+        original_qty
+    ):
         dq_flags.append("SOURCE_QUANTITY_RELATION_ANOMALY")
 
     return BinanceLiquidationRecord(
@@ -459,12 +461,8 @@ def records_to_table(records: list[BinanceLiquidationRecord]) -> pa.Table:
 
 def _table_rows_without_zoneinfo(table: pa.Table) -> list[dict[str, Any]]:
     """Convert Arrow rows without asking Windows for an external UTC tzdata file."""
-    timestamp_names = {
-        field.name for field in table.schema if pa.types.is_timestamp(field.type)
-    }
-    timestamp_values = {
-        name: table[name].cast(pa.int64()) for name in timestamp_names
-    }
+    timestamp_names = {field.name for field in table.schema if pa.types.is_timestamp(field.type)}
+    timestamp_values = {name: table[name].cast(pa.int64()) for name in timestamp_names}
     rows: list[dict[str, Any]] = []
     for index in range(table.num_rows):
         row: dict[str, Any] = {}
@@ -519,7 +517,12 @@ def merge_and_write_binance_liquidation_parquet(
             if existing.schema != BINANCE_LIQUIDATION_SCHEMA:
                 raise ValueError(f"Incompatible Binance liquidation schema: {existing_path}")
             for row in _table_rows_without_zoneinfo(existing):
-                key = (row["exchange"], row["instrument_id"], row["event_time"], row["dedup_fingerprint"])
+                key = (
+                    row["exchange"],
+                    row["instrument_id"],
+                    row["event_time"],
+                    row["dedup_fingerprint"],
+                )
                 rows_by_key.setdefault(key, row)
     new_rows = []
     for record in records:
@@ -530,7 +533,9 @@ def merge_and_write_binance_liquidation_parquet(
         key = (row["exchange"], row["instrument_id"], row["event_time"], row["dedup_fingerprint"])
         rows_by_key.setdefault(key, row)
 
-    ordered = sorted(rows_by_key.values(), key=lambda row: (row["event_time"], row["dedup_fingerprint"]))
+    ordered = sorted(
+        rows_by_key.values(), key=lambda row: (row["event_time"], row["dedup_fingerprint"])
+    )
     fingerprint = "\n".join(
         f"{row['instrument_id']}|{row['source_order_trade_time_ms']}|{row['dedup_fingerprint']}"
         for row in ordered
@@ -566,6 +571,8 @@ def persist_binance_liquidation_batch(
     symbol: str = "BTCUSDT",
     received_at: datetime | None = None,
     min_disk_free_gb: float = 20.0,
+    ingestion_run_id: str | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Persist genuine or fixture messages with raw/normalized/control isolation."""
     if symbol not in SUPPORTED_SYMBOLS:
@@ -628,7 +635,9 @@ def persist_binance_liquidation_batch(
         f"liq_{coverage_start:%Y%m%dT%H%M%SZ}_{coverage_end:%Y%m%dT%H%M%SZ}_{raw_hash[:8]}.jsonl"
     )
     if not raw_file.exists():
-        with tempfile.NamedTemporaryFile("wb", dir=raw_dir, delete=False, suffix=".partial") as handle:
+        with tempfile.NamedTemporaryFile(
+            "wb", dir=raw_dir, delete=False, suffix=".partial"
+        ) as handle:
             handle.write(raw_bytes)
             handle.flush()
             os.fsync(handle.fileno())
@@ -643,6 +652,7 @@ def persist_binance_liquidation_batch(
     parquet_files: list[Path] = []
     parquet_hashes: list[str] = []
     total_rows = 0
+    new_rows_persisted = 0
     for year, year_records in sorted(records_by_year.items()):
         year_dir = (
             root
@@ -654,12 +664,17 @@ def persist_binance_liquidation_batch(
             / f"symbol={symbol}"
             / f"year={year}"
         )
+        previous_rows = max(
+            (pq.ParquetFile(path).metadata.num_rows for path in year_dir.glob("part-*.parquet")),
+            default=0,
+        )
         parquet, rows, parquet_hash, _ = merge_and_write_binance_liquidation_parquet(
             year_dir, year_records
         )
         parquet_files.append(parquet)
         parquet_hashes.append(parquet_hash)
         total_rows += rows
+        new_rows_persisted += max(0, rows - previous_rows)
 
     manifest_dir = root / "control" / "manifests"
     manifest_dir.mkdir(parents=True, exist_ok=True)
@@ -689,7 +704,9 @@ def persist_binance_liquidation_batch(
         "raw_object_ref": str(raw_file.relative_to(root)).replace("\\", "/"),
         "raw_sha256": raw_hash,
         "raw_bytes": len(raw_bytes),
-        "created_parquets": [str(path.relative_to(root)).replace("\\", "/") for path in parquet_files],
+        "created_parquets": [
+            str(path.relative_to(root)).replace("\\", "/") for path in parquet_files
+        ],
         "parquet_sha256": parquet_hashes,
         "parquet_bytes": sum(path.stat().st_size for path in parquet_files),
         "source_dataset_id": DATASET_ID,
@@ -703,6 +720,8 @@ def persist_binance_liquidation_batch(
             "not ground truth for event count, cascade reconstruction, or liquidation volume",
             "no public historical backfill source verified; missed observations are unrecoverable or unknown",
         ],
+        "ingestion_run_id": ingestion_run_id,
+        "session_id": session_id,
         "retrieved_at": max(entry[2] for entry in parsed).isoformat(),
         "processed_at": utc_now().isoformat(),
     }
@@ -747,10 +766,55 @@ def persist_binance_liquidation_batch(
         "status": "PASS",
         "event_observation_status": "REAL_EVENT_OBSERVED",
         "records_count": len(ordered_records),
+        "new_rows_persisted": new_rows_persisted,
         "total_accumulated_rows": total_rows,
+        "observed_source_coverage_start": coverage_start.isoformat(),
+        "observed_source_coverage_end": coverage_end.isoformat(),
         "raw_file": str(raw_file),
         "parquet_files": [str(path) for path in parquet_files],
     }
+
+
+def _quarantine_failed_live_buffer(
+    root: Path,
+    symbol: str,
+    buffered: list[tuple[dict[str, Any], str, datetime]],
+    error: BaseException,
+) -> Path:
+    """Durably retain received wire frames that could not be normalized."""
+    raw_bytes = ("\n".join(raw for _, raw, _ in buffered) + "\n").encode("utf-8")
+    digest = hashlib.sha256(raw_bytes).hexdigest()
+    directory = root / "quarantine" / "liquidation_rejected_frames" / "binance" / symbol
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"rejected_{digest}.jsonl"
+    if not target.exists():
+        with tempfile.NamedTemporaryFile(
+            "wb", dir=directory, delete=False, suffix=".partial"
+        ) as handle:
+            handle.write(raw_bytes)
+            handle.flush()
+            os.fsync(handle.fileno())
+            partial = Path(handle.name)
+        os.replace(partial, target)
+    reason = target.with_suffix(".reason.json")
+    if not reason.exists():
+        payload = {
+            "source_dataset_id": DATASET_ID,
+            "source_contract_version": CONTRACT_ID,
+            "symbol": symbol,
+            "raw_sha256": digest,
+            "raw_message_count": len(buffered),
+            "reason_code": "PERSISTENCE_OR_NORMALIZATION_REJECTED",
+            "error_type": type(error).__name__,
+            "error": str(error),
+            "quarantined_at": utc_now().isoformat(),
+        }
+        with reason.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    return target
 
 
 async def collect_binance_liquidations_live(
@@ -762,6 +826,8 @@ async def collect_binance_liquidations_live(
     max_duration_seconds: float = 60.0,
     max_messages: int | None = None,
     min_disk_free_gb: float = 20.0,
+    ingestion_run_id: str | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Collect a bounded symbol-specific public market stream."""
     import websockets
@@ -771,13 +837,21 @@ async def collect_binance_liquidations_live(
     topic = f"{symbol.lower()}@forceOrder"
     buffered: list[tuple[dict[str, Any], str, datetime]] = []
     total_messages = 0
+    total_source_events_observed = 0
     total_records = 0
     flush_count = 0
+    started_at = utc_now()
     started = time.monotonic()
     last_flush = started
     heartbeat_status = "NOT_CHECKED"
+    connected_at: datetime | None = None
+    subscribed_at: datetime | None = None
+    wire_sha256_seen: list[str] = []
+    first_event_time: str | None = None
+    last_event_time: str | None = None
 
     async with websockets.connect(ws_url, ping_interval=20, ping_timeout=10) as websocket:
+        connected_at = utc_now()
         await websocket.send(json.dumps({"method": "SUBSCRIBE", "params": [topic], "id": 1}))
         ack_deadline = time.monotonic() + 10
         while True:
@@ -790,10 +864,13 @@ async def collect_binance_liquidations_live(
             if ack.get("id") == 1:
                 if ack.get("result") is not None:
                     raise RuntimeError(f"Binance WebSocket subscription failed: {ack}")
+                subscribed_at = utc_now()
                 break
             if ack.get("e") == "forceOrder":
                 buffered.append((ack, raw_ack, ack_received))
                 total_messages += 1
+                total_source_events_observed += 1
+                wire_sha256_seen.append(hashlib.sha256(raw_ack.encode()).hexdigest())
 
         pong_waiter = await websocket.ping()
         await asyncio.wait_for(pong_waiter, timeout=10)
@@ -812,32 +889,51 @@ async def collect_binance_liquidations_live(
                 if payload.get("e") == "forceOrder":
                     buffered.append((payload, raw_text, observed_at))
                     total_messages += 1
+                    total_source_events_observed += 1
+                    wire_sha256_seen.append(hashlib.sha256(raw_text.encode()).hexdigest())
             except TimeoutError:
                 pass
 
             now = time.monotonic()
             if buffered and (now - last_flush >= flush_interval_seconds or len(buffered) >= 50):
-                result = persist_binance_liquidation_batch(
-                    buffered,
-                    root,
-                    symbol=symbol,
-                    min_disk_free_gb=min_disk_free_gb,
-                )
-                total_records += result["records_count"]
+                try:
+                    result = persist_binance_liquidation_batch(
+                        buffered,
+                        root,
+                        symbol=symbol,
+                        min_disk_free_gb=min_disk_free_gb,
+                        ingestion_run_id=ingestion_run_id,
+                        session_id=session_id,
+                    )
+                except Exception as error:
+                    _quarantine_failed_live_buffer(root, symbol, buffered, error)
+                    raise
+                total_records += result["new_rows_persisted"]
+                first_event_time = first_event_time or result.get("observed_source_coverage_start")
+                last_event_time = result.get("observed_source_coverage_end") or last_event_time
                 flush_count += 1
                 buffered.clear()
                 last_flush = now
 
         if buffered:
-            result = persist_binance_liquidation_batch(
-                buffered,
-                root,
-                symbol=symbol,
-                min_disk_free_gb=min_disk_free_gb,
-            )
-            total_records += result["records_count"]
+            try:
+                result = persist_binance_liquidation_batch(
+                    buffered,
+                    root,
+                    symbol=symbol,
+                    min_disk_free_gb=min_disk_free_gb,
+                    ingestion_run_id=ingestion_run_id,
+                    session_id=session_id,
+                )
+            except Exception as error:
+                _quarantine_failed_live_buffer(root, symbol, buffered, error)
+                raise
+            total_records += result["new_rows_persisted"]
+            first_event_time = first_event_time or result.get("observed_source_coverage_start")
+            last_event_time = result.get("observed_source_coverage_end") or last_event_time
             flush_count += 1
 
+    ended_at = utc_now()
     return {
         "symbol": symbol,
         "topic": topic,
@@ -847,13 +943,30 @@ async def collect_binance_liquidations_live(
         "subscription_status": "PASS",
         "heartbeat_liveness": heartbeat_status,
         "event_observation_status": (
-            "REAL_EVENT_OBSERVED" if total_records else "NO_EVENT_OBSERVED_WITHIN_WINDOW"
+            "REAL_EVENT_OBSERVED"
+            if total_source_events_observed
+            else "NO_EVENT_OBSERVED_WITHIN_WINDOW"
         ),
         "capture_completeness": LOCAL_CAPTURE_COMPLETENESS,
         "source_claimed_completeness": SOURCE_COMPLETENESS,
         "selection_rule": SELECTION_RULE,
         "total_messages_received": total_messages,
+        "total_source_events_observed": total_source_events_observed,
         "total_records_persisted": total_records,
+        "wire_sha256_seen": wire_sha256_seen,
+        "first_event_time": first_event_time,
+        "last_event_time": last_event_time,
         "duration_seconds": round(time.monotonic() - started, 2),
         "flush_count": flush_count,
+        "ingestion_run_id": ingestion_run_id,
+        "session_id": session_id,
+        "started_at": started_at.isoformat(),
+        "connected_at": connected_at.isoformat() if connected_at else None,
+        "subscribed_at": subscribed_at.isoformat() if subscribed_at else None,
+        "ended_at": ended_at.isoformat(),
+        "termination_reason": "BOUNDED_SOAK_COMPLETED",
+        "queue_mode": "NOT_APPLICABLE_SYNCHRONOUS_READ_FLUSH",
+        "queue_high_water_mark": None,
+        "queue_capacity": None,
+        "dropped_messages": 0,
     }

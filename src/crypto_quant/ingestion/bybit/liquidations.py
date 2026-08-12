@@ -249,7 +249,9 @@ def parse_bybit_liquidation_message(
     for event_idx, item in enumerate(data_items):
         sym = item.get("s")
         if sym != ident.native_symbol:
-            raise ValueError(f"Symbol mismatch in data item: expected '{ident.native_symbol}', got '{sym}'")
+            raise ValueError(
+                f"Symbol mismatch in data item: expected '{ident.native_symbol}', got '{sym}'"
+            )
 
         raw_event_t = item.get("T")
         if raw_event_t is None:
@@ -326,7 +328,7 @@ def parse_bybit_liquidation_message(
             time_in_force=None,
             order_status=None,
             source_claimed_completeness="ALL_LIQUIDATIONS",  # Bybit claim: all liquidations pushed
-            delivery_semantics="BATCHED_500MS_PUSH",         # Delivery: batched at 500ms intervals
+            delivery_semantics="BATCHED_500MS_PUSH",  # Delivery: batched at 500ms intervals
             message_id=msg_id,
             dedup_fingerprint=dedup_fp,
             dedup_guarantee="EXACT_WIRE_REPLAY_ONLY",  # Cross-envelope dedup NOT guaranteed (no native event ID)
@@ -364,7 +366,9 @@ def validate_liquidation_records_dq(records: list[CanonicalLiquidationRecord]) -
         except Exception as exc:
             issues.append(f"Row {i}: Decimal parse failure: {exc}")
         if r.knowledge_time != r.received_at:
-            issues.append(f"Row {i}: Realtime knowledge_time mismatch: {r.knowledge_time} != {r.received_at}")
+            issues.append(
+                f"Row {i}: Realtime knowledge_time mismatch: {r.knowledge_time} != {r.received_at}"
+            )
 
     return issues
 
@@ -507,14 +511,18 @@ def merge_and_write_liquidation_parquet(
                     quantity_base=existing_table["quantity_base"][i].as_py(),
                     notional_quote=existing_table["notional_quote"][i].as_py(),
                     last_filled_quantity=existing_table["last_filled_quantity"][i].as_py(),
-                    accumulated_filled_quantity=existing_table["accumulated_filled_quantity"][i].as_py(),
+                    accumulated_filled_quantity=existing_table["accumulated_filled_quantity"][
+                        i
+                    ].as_py(),
                     source_price=existing_table["source_price"][i].as_py(),
                     price_semantic=existing_table["price_semantic"][i].as_py(),
                     average_fill_price=existing_table["average_fill_price"][i].as_py(),
                     order_type=existing_table["order_type"][i].as_py(),
                     time_in_force=existing_table["time_in_force"][i].as_py(),
                     order_status=existing_table["order_status"][i].as_py(),
-                    source_claimed_completeness=existing_table["source_claimed_completeness"][i].as_py(),
+                    source_claimed_completeness=existing_table["source_claimed_completeness"][
+                        i
+                    ].as_py(),
                     delivery_semantics=existing_table["delivery_semantics"][i].as_py(),
                     message_id=existing_table["message_id"][i].as_py(),
                     dedup_fingerprint=existing_table["dedup_fingerprint"][i].as_py(),
@@ -568,14 +576,21 @@ def merge_and_write_liquidation_parquet(
             collector_version=rec.collector_version,
             normalization_version=rec.normalization_version,
         )
-        key = (rec_utc.exchange, rec_utc.instrument_id, rec_utc.event_time, rec_utc.dedup_fingerprint)
+        key = (
+            rec_utc.exchange,
+            rec_utc.instrument_id,
+            rec_utc.event_time,
+            rec_utc.dedup_fingerprint,
+        )
         records_by_key[key] = rec_utc
 
-    sorted_records = sorted(records_by_key.values(), key=lambda r: (r.event_time, r.dedup_fingerprint))
+    sorted_records = sorted(
+        records_by_key.values(), key=lambda r: (r.event_time, r.dedup_fingerprint)
+    )
 
     # 3. Compute deterministic generation fingerprint
     fingerprint_items = [
-        f"{r.exchange}|{r.instrument_id}|{int(r.event_time.timestamp()*1000)}|{r.position_side_liquidated}|{r.source_price}|{r.source_quantity}|{r.dedup_fingerprint}"
+        f"{r.exchange}|{r.instrument_id}|{int(r.event_time.timestamp() * 1000)}|{r.position_side_liquidated}|{r.source_price}|{r.source_quantity}|{r.dedup_fingerprint}"
         for r in sorted_records
     ]
     gen_hash = hashlib.sha256("\n".join(fingerprint_items).encode("utf-8")).hexdigest()[:12]
@@ -607,6 +622,8 @@ def persist_bybit_liquidation_batch(
     root: Path,
     received_at: datetime | None = None,
     min_disk_free_gb: float = 20.0,
+    ingestion_run_id: str | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Normalizes and persists a batch of Bybit liquidation WebSocket messages to raw and canonical Parquet storage."""
     free_gb = disk_free_bytes(root) / (1024**3)
@@ -630,7 +647,9 @@ def persist_bybit_liquidation_batch(
             msg_dict, msg_str = item, json.dumps(item, sort_keys=True)
         unpacked_raw_msgs.append(msg_dict)
         unpacked_raw_strs.append(msg_str)
-        recs = parse_bybit_liquidation_message(msg_dict, ident, received_at=received_at, raw_msg_str=msg_str)
+        recs = parse_bybit_liquidation_message(
+            msg_dict, ident, received_at=received_at, raw_msg_str=msg_str
+        )
         all_records.extend(recs)
 
     if not all_records:
@@ -687,13 +706,19 @@ def persist_bybit_liquidation_batch(
     created_parquet_files: list[Path] = []
     parquet_hashes: list[str] = []
     total_dataset_rows = 0
+    new_rows_persisted = 0
 
     for yr, yr_records in sorted(records_by_year.items()):
         yr_dir = norm_base / f"year={yr}"
+        previous_rows = max(
+            (pq.ParquetFile(path).metadata.num_rows for path in yr_dir.glob("part-*.parquet")),
+            default=0,
+        )
         target_parquet, partition_rows, p_sha, _ = merge_and_write_liquidation_parquet(
             yr_dir, symbol, yr, yr_records
         )
         total_dataset_rows += partition_rows
+        new_rows_persisted += max(0, partition_rows - previous_rows)
         created_parquet_files.append(target_parquet)
         parquet_hashes.append(p_sha)
 
@@ -726,7 +751,9 @@ def persist_bybit_liquidation_batch(
         "raw_object_ref": str(raw_file.relative_to(root)).replace("\\", "/"),
         "raw_sha256": raw_hash,
         "raw_bytes": len(raw_bytes),
-        "created_parquets": [str(p.relative_to(root)).replace("\\", "/") for p in created_parquet_files],
+        "created_parquets": [
+            str(p.relative_to(root)).replace("\\", "/") for p in created_parquet_files
+        ],
         "parquet_sha256": parquet_hashes,
         "parquet_bytes": sum(p.stat().st_size for p in created_parquet_files),
         "source_dataset_id": DATASET_ID,
@@ -739,12 +766,18 @@ def persist_bybit_liquidation_batch(
             "historical archive unavailable from venue; local history starts from first captured realtime event",
             "message label snapshot is batch envelope metadata tag and does not imply state replacement",
         ],
+        "ingestion_run_id": ingestion_run_id,
+        "session_id": session_id,
         "retrieved_at": retrieved_iso,
         "processed_at": utc_now().isoformat(),
     }
 
-    existing_manifest_content = manifest_file.read_text(encoding="utf-8") if manifest_file.exists() else ""
-    if raw_hash not in existing_manifest_content or any(h not in existing_manifest_content for h in parquet_hashes):
+    existing_manifest_content = (
+        manifest_file.read_text(encoding="utf-8") if manifest_file.exists() else ""
+    )
+    if raw_hash not in existing_manifest_content or any(
+        h not in existing_manifest_content for h in parquet_hashes
+    ):
         with manifest_file.open("a", encoding="utf-8") as mf:
             mf.write(json.dumps(manifest_record) + "\n")
 
@@ -771,12 +804,55 @@ def persist_bybit_liquidation_batch(
         "status": "PASS",
         "event_observation_status": "REAL_EVENT_OBSERVED",
         "records_count": len(sorted_records),
+        "new_rows_persisted": new_rows_persisted,
         "total_accumulated_rows": total_dataset_rows,
         "observed_source_coverage_start": sorted_records[0].event_time.isoformat(),
         "observed_source_coverage_end": sorted_records[-1].event_time.isoformat(),
         "raw_file": str(raw_file),
         "parquet_files": [str(p) for p in created_parquet_files],
     }
+
+
+def _quarantine_failed_live_buffer(
+    root: Path,
+    symbol: str,
+    buffered: list[tuple[dict[str, Any], str]],
+    error: BaseException,
+) -> Path:
+    """Durably retain received wire frames that could not be normalized."""
+    raw_bytes = ("\n".join(raw for _, raw in buffered) + "\n").encode("utf-8")
+    digest = hashlib.sha256(raw_bytes).hexdigest()
+    directory = root / "quarantine" / "liquidation_rejected_frames" / "bybit" / symbol
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"rejected_{digest}.jsonl"
+    if not target.exists():
+        with tempfile.NamedTemporaryFile(
+            "wb", dir=directory, delete=False, suffix=".partial"
+        ) as handle:
+            handle.write(raw_bytes)
+            handle.flush()
+            os.fsync(handle.fileno())
+            partial = Path(handle.name)
+        os.replace(partial, target)
+    reason = target.with_suffix(".reason.json")
+    if not reason.exists():
+        payload = {
+            "source_dataset_id": DATASET_ID,
+            "source_contract_version": CONTRACT_ID,
+            "symbol": symbol,
+            "raw_sha256": digest,
+            "raw_message_count": len(buffered),
+            "reason_code": "PERSISTENCE_OR_NORMALIZATION_REJECTED",
+            "error_type": type(error).__name__,
+            "error": str(error),
+            "quarantined_at": utc_now().isoformat(),
+        }
+        with reason.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    return target
 
 
 async def collect_bybit_liquidations_live(
@@ -788,6 +864,8 @@ async def collect_bybit_liquidations_live(
     max_duration_seconds: float | None = None,
     max_messages: int | None = None,
     min_disk_free_gb: float = 20.0,
+    ingestion_run_id: str | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Asynchronous WebSocket collector for Bybit Linear real-time liquidations."""
     import websockets
@@ -797,18 +875,27 @@ async def collect_bybit_liquidations_live(
 
     buffered_raw_messages: list[tuple[dict[str, Any], str]] = []
     total_messages_received = 0
+    total_source_events_observed = 0
     total_records_persisted = 0
+    started_at = utc_now()
     start_time = time.time()
     last_flush_time = time.time()
     persist_results: list[dict[str, Any]] = []
+    connected_at: datetime | None = None
+    subscribed_at: datetime | None = None
+    wire_sha256_seen: list[str] = []
+    first_event_time: str | None = None
+    last_event_time: str | None = None
 
     async with websockets.connect(ws_url, ping_interval=20, ping_timeout=10) as ws:
+        connected_at = utc_now()
         sub_msg = {"op": "subscribe", "args": [topic]}
         await ws.send(json.dumps(sub_msg))
         ack_str = await ws.recv()
         ack = json.loads(ack_str)
         if not ack.get("success", False):
             raise RuntimeError(f"Bybit WebSocket subscription failed: {ack}")
+        subscribed_at = utc_now()
         logger.info(f"Subscribed successfully to {topic}")
 
         while True:
@@ -827,46 +914,86 @@ async def collect_bybit_liquidations_live(
                 if msg.get("topic") == topic and "data" in msg:
                     buffered_raw_messages.append((msg, msg_str))
                     total_messages_received += 1
+                    total_source_events_observed += len(msg["data"])
+                    wire_sha256_seen.append(hashlib.sha256(msg_str.encode()).hexdigest())
             except TimeoutError:
                 pass
 
             # Flush buffer periodically if records exist
             now = time.time()
-            if buffered_raw_messages and (now - last_flush_time >= flush_interval_seconds or len(buffered_raw_messages) >= 50):
+            if buffered_raw_messages and (
+                now - last_flush_time >= flush_interval_seconds or len(buffered_raw_messages) >= 50
+            ):
+                try:
+                    res = persist_bybit_liquidation_batch(
+                        buffered_raw_messages,
+                        symbol=symbol,
+                        root=root,
+                        received_at=utc_now(),
+                        min_disk_free_gb=min_disk_free_gb,
+                        ingestion_run_id=ingestion_run_id,
+                        session_id=session_id,
+                    )
+                except Exception as error:
+                    _quarantine_failed_live_buffer(root, symbol, buffered_raw_messages, error)
+                    raise
+                persist_results.append(res)
+                total_records_persisted += res.get("new_rows_persisted", 0)
+                first_event_time = first_event_time or res.get("observed_source_coverage_start")
+                last_event_time = res.get("observed_source_coverage_end") or last_event_time
+                buffered_raw_messages.clear()
+                last_flush_time = now
+
+        # Final flush on exit
+        if buffered_raw_messages:
+            try:
                 res = persist_bybit_liquidation_batch(
                     buffered_raw_messages,
                     symbol=symbol,
                     root=root,
                     received_at=utc_now(),
                     min_disk_free_gb=min_disk_free_gb,
+                    ingestion_run_id=ingestion_run_id,
+                    session_id=session_id,
                 )
-                persist_results.append(res)
-                total_records_persisted += res.get("records_count", 0)
-                buffered_raw_messages.clear()
-                last_flush_time = now
-
-        # Final flush on exit
-        if buffered_raw_messages:
-            res = persist_bybit_liquidation_batch(
-                buffered_raw_messages,
-                symbol=symbol,
-                root=root,
-                received_at=utc_now(),
-                min_disk_free_gb=min_disk_free_gb,
-            )
+            except Exception as error:
+                _quarantine_failed_live_buffer(root, symbol, buffered_raw_messages, error)
+                raise
             persist_results.append(res)
-            total_records_persisted += res.get("records_count", 0)
+            total_records_persisted += res.get("new_rows_persisted", 0)
+            first_event_time = first_event_time or res.get("observed_source_coverage_start")
+            last_event_time = res.get("observed_source_coverage_end") or last_event_time
             buffered_raw_messages.clear()
 
-    obs_status = "REAL_EVENT_OBSERVED" if total_records_persisted > 0 else "NO_EVENT_OBSERVED_WITHIN_WINDOW"
+    obs_status = (
+        "REAL_EVENT_OBSERVED"
+        if total_source_events_observed > 0
+        else "NO_EVENT_OBSERVED_WITHIN_WINDOW"
+    )
 
+    ended_at = utc_now()
     return {
         "symbol": symbol,
         "status": "PASS",
         "transport_status": "PASS",
         "event_observation_status": obs_status,
         "total_messages_received": total_messages_received,
+        "total_source_events_observed": total_source_events_observed,
         "total_records_persisted": total_records_persisted,
+        "wire_sha256_seen": wire_sha256_seen,
+        "first_event_time": first_event_time,
+        "last_event_time": last_event_time,
         "duration_seconds": round(time.time() - start_time, 2),
         "flush_count": len(persist_results),
+        "ingestion_run_id": ingestion_run_id,
+        "session_id": session_id,
+        "started_at": started_at.isoformat(),
+        "connected_at": connected_at.isoformat() if connected_at else None,
+        "subscribed_at": subscribed_at.isoformat() if subscribed_at else None,
+        "ended_at": ended_at.isoformat(),
+        "termination_reason": "BOUNDED_SOAK_COMPLETED",
+        "queue_mode": "NOT_APPLICABLE_SYNCHRONOUS_READ_FLUSH",
+        "queue_high_water_mark": None,
+        "queue_capacity": None,
+        "dropped_messages": 0,
     }

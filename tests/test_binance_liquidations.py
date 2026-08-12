@@ -608,4 +608,9 @@ async def test_eth_topic_btc_payload_mismatch_fails_before_authoritative_write(
             max_duration_seconds=5,
         )
     assert json.loads(websocket.sent[0])["params"] == ["ethusdt@forceOrder"]
-    assert not any(tmp_path.iterdir())
+    assert not (tmp_path / "raw").exists()
+    assert not (tmp_path / "normalized").exists()
+    assert not (tmp_path / "control").exists()
+    rejected = list((tmp_path / "quarantine" / "liquidation_rejected_frames").rglob("*.jsonl"))
+    assert len(rejected) == 1
+    assert rejected[0].read_text(encoding="utf-8") == btc_raw + "\n"
