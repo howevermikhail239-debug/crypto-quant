@@ -24,8 +24,8 @@
 ## C. CURRENT GIT STATE
 - **Branch:** master
 - **Accepted parent before PHASE 1E.1:** `0857da87c161e67a16ecd37fe69e40998ae58043`
-- **Current implementation:** PHASE 1E.1 storage/operational-DQ checkpoint (see `docs/phase1e1-storage-operational-dq-report.md`)
-- **Working Tree:** expected clean after the PHASE 1E.1 checkpoint commit
+- **Current implementation:** PHASE 1E.1 FINAL DONE / ACCEPTED (see `docs/phase1e1-storage-operational-dq-report.md`)
+- **Working Tree:** expected clean after the PHASE 1E.1 acceptance commit
 - **Test Count:** 262 passed
 
 **Latest important commits:**
@@ -54,10 +54,10 @@
 - PHASE 1D.3C (Binance USD-M BTCUSDT Liquidations): **FINAL DONE / ACCEPTED**
 - PHASE 1D.3D (Binance USD-M ETHUSDT Liquidations Parity): **FINAL DONE / ACCEPTED**
 - PHASE 1D.3F (Liquidation Soak / Gaps / Source-Local DQ): **FINAL DONE / ACCEPTED**
-- PHASE 1E.1 (Storage & Operational DQ Foundation): **IMPLEMENTED / READY FOR SHORT ACCEPTANCE**
+- PHASE 1E.1 (Storage & Operational DQ Foundation): **FINAL DONE / ACCEPTED**
 
 **Next Authorized Step:**
-- short independent acceptance of PHASE 1E.1 only; no later implementation phase is authorized
+- no later implementation package is authorized; threshold calibration, longer observation if required, final Data Quality Report, and remaining PHASE 1E gates stay separate
 
 ## E. DATA LOCATIONS
 - **Repository:** `C:\Users\Admin\Documents\ChatGPT\анализ крипты`
@@ -171,7 +171,7 @@ Until a verified source exists, missed realtime WS events are UNRECOVERABLE / UN
 - **CRITICAL IMPERATIVE:** DO NOT IMPLEMENT STRATEGY ENGINE NOW. This is purely an architectural reservation.
 
 ## N. CURRENT ACCEPTED CHECKPOINT
-**PHASE 1E.1 — IMPLEMENTED / READY FOR SHORT ACCEPTANCE.**
+**PHASE 1E.1 — FINAL DONE / ACCEPTED.**
 
 Previous accepted checkpoint:
 **PHASE 1D.3F — FINAL DONE / ACCEPTED.**
@@ -182,6 +182,7 @@ Previous accepted checkpoint:
 - Audit fixes: explicit ACK evidence, durable flush on disconnect, fail-closed Bybit side semantics, and rejection of nonexistent run reconciliation.
 - PHASE 1E.1 evidence: `docs/phase1e1-storage-operational-dq-report.md`.
 - Final validation: 262 tests PASS; Ruff/config/lock/data-root immutability audit PASS.
+- Short independent acceptance: PASS; no defect found and production code unchanged.
 - **Do not begin the next PHASE 1E sub-slice, features, models, Telegram, paper/live execution, or final threshold calibration without a separate approved gate.**
 
 ## O. VALIDATION COMMANDS FOR NEXT AGENT

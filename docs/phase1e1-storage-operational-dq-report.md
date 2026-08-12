@@ -1,6 +1,6 @@
 # PHASE 1E.1 — Storage & Operational DQ Foundation
 
-**Status:** IMPLEMENTED / READY FOR SHORT ACCEPTANCE
+**Status:** FINAL DONE / ACCEPTED
 
 **Accepted parent:** `0857da87c161e67a16ecd37fe69e40998ae58043`
 
@@ -74,4 +74,6 @@ Results: uv lock PASS; Ruff PASS; 262 tests PASS; config-check PASS; operational
 
 ## Gate conclusion
 
-No BLOCKER or HIGH issue was found in the implemented scope after focused and full validation. PHASE 1E.1 is **IMPLEMENTED / READY FOR SHORT ACCEPTANCE**. Stop here; do not begin another PHASE 1E sub-slice without explicit authorization.
+Short independent acceptance on 2026-08-12 confirmed 0 mutable user tables, 96 unique active artifact references, preserved venue/market/instrument/dataset identity columns, 7 focused tests, and 262 full-suite tests. No defect was found and production code was not changed during acceptance.
+
+PHASE 1E.1 is **FINAL DONE / ACCEPTED**. Threshold calibration, longer operational observation if required, the final Data Quality Report, and all remaining PHASE 1E gate work remain separate future packages. Stop here; do not begin another PHASE 1E sub-slice without explicit authorization.
