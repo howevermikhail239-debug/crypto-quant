@@ -1,4 +1,4 @@
-"""Binance USD-M BTCUSDT public liquidation observations (PHASE 1D.3C).
+"""Binance USD-M BTCUSDT/ETHUSDT public liquidation observations.
 
 The source is incomplete by venue design: at most one selected force-order
 observation per symbol per 1000 ms is published. Current official materials
@@ -48,6 +48,7 @@ DELIVERY_SEMANTICS = "MAX_ONE_SELECTED_PER_SYMBOL_PER_1000MS"
 SELECTION_RULE = "DOC_CONFLICT_LATEST_VS_LARGEST"
 LOCAL_CAPTURE_COMPLETENESS = "OBSERVED_DURING_CONNECTED_WINDOW_ONLY"
 SOURCE_WINDOW_MS = 1000
+SUPPORTED_SYMBOLS = frozenset({"BTCUSDT", "ETHUSDT"})
 
 
 def binance_usdm_liquidation_data_contract() -> DataContract:
@@ -113,29 +114,29 @@ def binance_usdm_liquidation_data_contract() -> DataContract:
         ContractField(
             source_field="o.q",
             semantic_meaning="original_order_quantity",
-            source_unit="base_asset_for_BTCUSDT_USDM",
+            source_unit="canonical_instrument_base_asset",
             nullable=False,
             canonical_field="source_quantity",
             transformation="preserve_decimal_string",
-            normalized_unit="BTC",
+            normalized_unit="canonical_instrument_base_asset",
         ),
         ContractField(
             source_field="o.p",
             semantic_meaning="order_price",
-            source_unit="USDT_per_BTC",
+            source_unit="canonical_quote_per_base_asset",
             nullable=False,
             canonical_field="source_price",
             transformation="preserve_decimal_string",
-            normalized_unit="USDT_per_BTC",
+            normalized_unit="canonical_quote_per_base_asset",
         ),
         ContractField(
             source_field="o.ap",
             semantic_meaning="average_price",
-            source_unit="USDT_per_BTC",
+            source_unit="canonical_quote_per_base_asset",
             nullable=False,
             canonical_field="average_fill_price",
             transformation="preserve_decimal_string",
-            normalized_unit="USDT_per_BTC",
+            normalized_unit="canonical_quote_per_base_asset",
         ),
         ContractField(
             source_field="o.X",
@@ -147,20 +148,20 @@ def binance_usdm_liquidation_data_contract() -> DataContract:
         ContractField(
             source_field="o.l",
             semantic_meaning="order_last_filled_quantity",
-            source_unit="base_asset_for_BTCUSDT_USDM",
+            source_unit="canonical_instrument_base_asset",
             nullable=False,
             canonical_field="last_filled_quantity",
             transformation="preserve_decimal_string",
-            normalized_unit="BTC",
+            normalized_unit="canonical_instrument_base_asset",
         ),
         ContractField(
             source_field="o.z",
             semantic_meaning="order_filled_accumulated_quantity",
-            source_unit="base_asset_for_BTCUSDT_USDM",
+            source_unit="canonical_instrument_base_asset",
             nullable=False,
             canonical_field="accumulated_filled_quantity",
             transformation="preserve_decimal_string",
-            normalized_unit="BTC",
+            normalized_unit="canonical_instrument_base_asset",
         ),
         ContractField(
             source_field="o.T",
@@ -307,9 +308,11 @@ def _decimal_lexeme(value: Any, field: str, *, strictly_positive: bool) -> str:
 
 
 def _validate_identity(identity: InstrumentIdentity) -> None:
-    expected = funding_identity("BTCUSDT")
+    if identity.native_symbol not in SUPPORTED_SYMBOLS:
+        raise ValueError("Binance USD-M liquidations permit BTCUSDT/ETHUSDT only")
+    expected = funding_identity(identity.native_symbol)
     if identity != expected:
-        raise ValueError("PHASE 1D.3C accepts only canonical Binance USD-M BTCUSDT identity")
+        raise ValueError("Binance liquidation identity must match the canonical USD-M instrument")
 
 
 def parse_binance_liquidation_message(
@@ -387,7 +390,7 @@ def parse_binance_liquidation_message(
         source_side=side,
         source_side_semantic="FORCED_LIQUIDATION_ORDER_SIDE",
         source_quantity=original_qty,
-        source_quantity_unit="BTC",
+        source_quantity_unit=identity.quantity_unit,
         quantity_semantic="ORIGINAL_ORDER_QUANTITY",
         quantity_base=original_qty,
         notional_quote=None,
@@ -421,13 +424,16 @@ def parse_binance_liquidation_message(
 
 def validate_binance_liquidation_records(records: list[BinanceLiquidationRecord]) -> list[str]:
     issues: list[str] = []
-    expected_id = funding_identity("BTCUSDT").instrument_id
     for index, record in enumerate(records):
-        if (record.exchange, record.symbol, record.instrument_id) != (
-            "binance",
-            "BTCUSDT",
-            expected_id,
-        ):
+        try:
+            expected = funding_identity(record.symbol)
+        except ValueError:
+            expected = None
+        if expected is None or (
+            record.exchange,
+            record.instrument_id,
+            record.source_quantity_unit,
+        ) != ("binance", expected.instrument_id, expected.quantity_unit):
             issues.append(f"Row {index}: canonical identity mismatch")
         if record.knowledge_time != record.received_at:
             issues.append(f"Row {index}: knowledge_time must equal received_at")
@@ -530,9 +536,13 @@ def merge_and_write_binance_liquidation_parquet(
         for row in ordered
     )
     generation_hash = hashlib.sha256(fingerprint.encode()).hexdigest()[:12]
+    symbols = {row["symbol"] for row in ordered}
+    if len(symbols) != 1:
+        raise ValueError("A Binance liquidation generation cannot mix symbols")
+    symbol = symbols.pop()
     year = ordered[0]["event_time"].year
     year_dir.mkdir(parents=True, exist_ok=True)
-    target = year_dir / f"part-btcusdt_{year}_{generation_hash}.parquet"
+    target = year_dir / f"part-{symbol.lower()}_{year}_{generation_hash}.parquet"
     if target.exists():
         return target, len(ordered), _sha256_file(target), target.stat().st_size
 
@@ -558,8 +568,8 @@ def persist_binance_liquidation_batch(
     min_disk_free_gb: float = 20.0,
 ) -> dict[str, Any]:
     """Persist genuine or fixture messages with raw/normalized/control isolation."""
-    if symbol != "BTCUSDT":
-        raise ValueError("PHASE 1D.3C is restricted to BTCUSDT")
+    if symbol not in SUPPORTED_SYMBOLS:
+        raise ValueError("Binance USD-M liquidations permit BTCUSDT/ETHUSDT only")
     if not raw_messages:
         return {
             "symbol": symbol,
@@ -756,8 +766,8 @@ async def collect_binance_liquidations_live(
     """Collect a bounded symbol-specific public market stream."""
     import websockets
 
-    if symbol != "BTCUSDT":
-        raise ValueError("PHASE 1D.3C collector is restricted to BTCUSDT")
+    if symbol not in SUPPORTED_SYMBOLS:
+        raise ValueError("Binance USD-M liquidations permit BTCUSDT/ETHUSDT only")
     topic = f"{symbol.lower()}@forceOrder"
     buffered: list[tuple[dict[str, Any], str, datetime]] = []
     total_messages = 0

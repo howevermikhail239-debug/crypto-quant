@@ -113,33 +113,33 @@ fields:
 
   - source_field: o.q
     semantic_meaning: original_order_quantity
-    source_unit: base_asset_for_BTCUSDT_USDM
+    source_unit: canonical_instrument_base_asset
     nullable: false
     canonical_field: source_quantity
     transformation: preserve_decimal_string
-    normalized_unit: BTC
+    normalized_unit: canonical_instrument_base_asset
     validation_rules: [strictly_positive]
     known_limitations:
       - "Original quantity is not asserted to equal true liquidation volume."
 
   - source_field: o.p
     semantic_meaning: order_price
-    source_unit: quote_asset_per_base_asset
+    source_unit: canonical_quote_per_base_asset
     nullable: false
     canonical_field: source_price
     transformation: preserve_decimal_string
-    normalized_unit: USDT_per_BTC
+    normalized_unit: canonical_quote_per_base_asset
     validation_rules: [non_negative]
     known_limitations:
       - "Order price is not bankruptcy price and is not selected as execution ground truth."
 
   - source_field: o.ap
     semantic_meaning: average_price
-    source_unit: quote_asset_per_base_asset
+    source_unit: canonical_quote_per_base_asset
     nullable: false
     canonical_field: average_fill_price
     transformation: preserve_decimal_string
-    normalized_unit: USDT_per_BTC
+    normalized_unit: canonical_quote_per_base_asset
     validation_rules: [non_negative]
 
   - source_field: o.X
@@ -152,22 +152,22 @@ fields:
 
   - source_field: o.l
     semantic_meaning: order_last_filled_quantity
-    source_unit: base_asset_for_BTCUSDT_USDM
+    source_unit: canonical_instrument_base_asset
     nullable: false
     canonical_field: last_filled_quantity
     transformation: preserve_decimal_string
-    normalized_unit: BTC
+    normalized_unit: canonical_instrument_base_asset
     validation_rules: [non_negative]
     known_limitations:
       - "Last-filled quantity is not asserted to equal true liquidation volume."
 
   - source_field: o.z
     semantic_meaning: order_filled_accumulated_quantity
-    source_unit: base_asset_for_BTCUSDT_USDM
+    source_unit: canonical_instrument_base_asset
     nullable: false
     canonical_field: accumulated_filled_quantity
     transformation: preserve_decimal_string
-    normalized_unit: BTC
+    normalized_unit: canonical_instrument_base_asset
     validation_rules: [non_negative]
     known_limitations:
       - "Accumulated-filled quantity is not asserted to equal true liquidation volume."

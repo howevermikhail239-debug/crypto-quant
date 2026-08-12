@@ -1,4 +1,4 @@
-"""PHASE 1D.3C Binance USD-M BTCUSDT liquidation source-contract tests."""
+"""Binance USD-M BTCUSDT/ETHUSDT liquidation source-contract tests."""
 
 from __future__ import annotations
 
@@ -26,11 +26,14 @@ from crypto_quant.ingestion.binance.liquidations import (
     persist_binance_liquidation_batch,
     validate_binance_liquidation_records,
 )
+from crypto_quant.ingestion.binance.spot_trades import binance_spot_identity
 from crypto_quant.ingestion.bybit.funding import funding_identity as bybit_identity
 
 FIXTURE_DIR = Path("tests/fixtures/binance")
 SELL_FIXTURE = FIXTURE_DIR / "ws_force_order_usdm_btc_sell.json"
 BUY_FIXTURE = FIXTURE_DIR / "ws_force_order_usdm_btc_buy.json"
+ETH_SELL_FIXTURE = FIXTURE_DIR / "ws_force_order_usdm_eth_sell.json"
+ETH_BUY_FIXTURE = FIXTURE_DIR / "ws_force_order_usdm_eth_buy.json"
 
 
 def _wire(path: Path) -> tuple[dict, str]:
@@ -80,6 +83,15 @@ def test_frozen_source_contract_records_document_conflict_and_private_history():
         "o.z",
         "o.T",
     }
+    yaml_by_source = {field["source_field"]: field for field in data["fields"]}
+    contract_by_source = {field.source_field: field for field in contract.fields}
+    for source_field in ("o.q", "o.l", "o.z"):
+        assert yaml_by_source[source_field]["normalized_unit"] == (
+            "canonical_instrument_base_asset"
+        )
+        assert contract_by_source[source_field].normalized_unit == (
+            "canonical_instrument_base_asset"
+        )
 
 
 @pytest.mark.parametrize(
@@ -163,6 +175,77 @@ def test_unknown_nonempty_order_attributes_are_preserved_and_clock_skew_is_flagg
 
 
 @pytest.mark.parametrize(
+    ("fixture", "expected_side", "q", "last", "accumulated", "price", "average"),
+    [
+        (ETH_SELL_FIXTURE, "SELL", "1.250000", "0.300000", "0.700000", "4200.10", "4198.25"),
+        (ETH_BUY_FIXTURE, "BUY", "2.500000", "1.300000", "2.000000", "4210.20", "4208.15"),
+    ],
+)
+def test_eth_source_semantics_and_canonical_identity_are_independently_preserved(
+    fixture: Path,
+    expected_side: str,
+    q: str,
+    last: str,
+    accumulated: str,
+    price: str,
+    average: str,
+):
+    payload, raw = _wire(fixture)
+    identity = binance_identity("ETHUSDT")
+    record = parse_binance_liquidation_message(payload, identity, _received(), raw_msg_str=raw)
+
+    assert identity.instrument_id == "ins_13dce2c0972bec4044d9"
+    assert len(
+        {
+            identity.instrument_id,
+            binance_identity("BTCUSDT").instrument_id,
+            bybit_identity("BTCUSDT").instrument_id,
+            bybit_identity("ETHUSDT").instrument_id,
+            binance_spot_identity("ETHUSDT").instrument_id,
+        }
+    ) == 5
+    assert (identity.base_asset, identity.quote_asset, identity.settle_asset) == (
+        "ETH",
+        "USDT",
+        "USDT",
+    )
+    assert identity.quantity_unit == record.source_quantity_unit == "ETH"
+    assert record.quantity_base == record.source_quantity == q
+    assert record.last_filled_quantity == last
+    assert record.accumulated_filled_quantity == accumulated
+    assert record.source_price == price
+    assert record.average_fill_price == average
+    assert record.source_side == expected_side
+    assert record.position_side_liquidated == "UNKNOWN"
+    assert record.source_claimed_completeness == SOURCE_COMPLETENESS
+    assert record.selection_rule == SELECTION_RULE
+    assert record.source_window_ms == 1000
+    assert validate_binance_liquidation_records([record]) == []
+
+
+def test_eth_malformed_and_wrong_identity_fail_closed():
+    payload, _ = _wire(ETH_SELL_FIXTURE)
+    payload["o"].pop("z")
+    raw = json.dumps(payload, separators=(",", ":"))
+    with pytest.raises(ValueError, match="o.z"):
+        parse_binance_liquidation_message(
+            payload,
+            binance_identity("ETHUSDT"),
+            _received(),
+            raw_msg_str=raw,
+        )
+
+    good, good_raw = _wire(ETH_BUY_FIXTURE)
+    with pytest.raises(ValueError, match="canonical USD-M instrument"):
+        parse_binance_liquidation_message(
+            good,
+            binance_spot_identity("ETHUSDT"),
+            _received(),
+            raw_msg_str=good_raw,
+        )
+
+
+@pytest.mark.parametrize(
     "mutator,match",
     [
         (lambda payload: payload.update(e="trade"), "event type"),
@@ -198,6 +281,20 @@ def test_wrong_symbol_batch_fails_before_any_authoritative_write(tmp_path: Path)
     assert not (tmp_path / "raw").exists()
     assert not (tmp_path / "normalized").exists()
     assert not (tmp_path / "control").exists()
+
+
+def test_requested_eth_with_btc_payload_and_inverse_fail_before_write(tmp_path: Path):
+    btc, btc_raw = _wire(SELL_FIXTURE)
+    with pytest.raises(ValueError, match="Symbol mismatch"):
+        persist_binance_liquidation_batch(
+            [(btc, btc_raw, _received())], tmp_path, symbol="ETHUSDT"
+        )
+    eth, eth_raw = _wire(ETH_SELL_FIXTURE)
+    with pytest.raises(ValueError, match="Symbol mismatch"):
+        persist_binance_liquidation_batch(
+            [(eth, eth_raw, _received())], tmp_path, symbol="BTCUSDT"
+        )
+    assert not any(tmp_path.iterdir())
 
 
 def test_snapshot_observations_append_exact_replay_deduplicates_and_lineage_is_consistent(
@@ -287,6 +384,80 @@ def test_different_wire_envelopes_are_not_heuristically_economic_deduplicated(tm
     assert result["total_accumulated_rows"] == 2
 
 
+def test_btc_eth_storage_dedup_manifest_and_checkpoint_isolation(tmp_path: Path):
+    btc, btc_raw = _wire(SELL_FIXTURE)
+    eth = json.loads(btc_raw)
+    eth["o"]["s"] = "ETHUSDT"
+    eth_raw = json.dumps(eth, separators=(",", ":"))
+
+    btc_result = persist_binance_liquidation_batch([(btc, btc_raw, _received())], tmp_path)
+    btc_parquet = Path(btc_result["parquet_files"][0])
+    btc_parquet_hash = hashlib.sha256(btc_parquet.read_bytes()).hexdigest()
+    btc_checkpoint = tmp_path / "control" / "checkpoints" / "binance_usdm_liquidations_BTCUSDT.json"
+    btc_checkpoint_bytes = btc_checkpoint.read_bytes()
+
+    eth_result = persist_binance_liquidation_batch(
+        [(eth, eth_raw, _received())], tmp_path, symbol="ETHUSDT"
+    )
+    eth_parquet = Path(eth_result["parquet_files"][0])
+
+    assert btc_parquet != eth_parquet
+    assert "symbol=BTCUSDT" in str(btc_parquet)
+    assert "symbol=ETHUSDT" in str(eth_parquet)
+    assert hashlib.sha256(btc_parquet.read_bytes()).hexdigest() == btc_parquet_hash
+    assert btc_checkpoint.read_bytes() == btc_checkpoint_bytes
+    assert Path(btc_result["raw_file"]).parent != Path(eth_result["raw_file"]).parent
+    assert hashlib.sha256(Path(btc_result["raw_file"]).read_bytes()).hexdigest() != hashlib.sha256(
+        Path(eth_result["raw_file"]).read_bytes()
+    ).hexdigest()
+    assert btc_parquet_hash != hashlib.sha256(eth_parquet.read_bytes()).hexdigest()
+
+    btc_table = pq.ParquetFile(btc_parquet).read()
+    eth_table = pq.ParquetFile(eth_parquet).read()
+    assert btc_table["instrument_id"][0].as_py() == binance_identity("BTCUSDT").instrument_id
+    assert eth_table["instrument_id"][0].as_py() == binance_identity("ETHUSDT").instrument_id
+    assert btc_table["message_id"][0].as_py() != eth_table["message_id"][0].as_py()
+
+    eth_replay = persist_binance_liquidation_batch(
+        [(eth, eth_raw, _received()), (eth, eth_raw, _received())],
+        tmp_path,
+        symbol="ETHUSDT",
+    )
+    assert eth_replay["records_count"] == eth_replay["total_accumulated_rows"] == 1
+
+    manifests = [
+        json.loads(line)
+        for line in (tmp_path / "control" / "manifests" / "binance_usdm_liquidations.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    by_symbol = {
+        symbol: [row for row in manifests if row["symbol"] == symbol]
+        for symbol in {row["symbol"] for row in manifests}
+    }
+    assert set(by_symbol) == {"BTCUSDT", "ETHUSDT"}
+    assert len(by_symbol["BTCUSDT"]) == 1
+    assert len(by_symbol["ETHUSDT"]) == 2
+    for symbol, rows in by_symbol.items():
+        assert {row["instrument_id"] for row in rows} == {
+            binance_identity(symbol).instrument_id
+        }
+        assert {row["event_count"] for row in rows} == {1}
+        assert {row["row_count"] for row in rows} == {1}
+    assert by_symbol["BTCUSDT"][0]["raw_message_count"] == 1
+    assert by_symbol["BTCUSDT"][0]["observation_count"] == 1
+    assert by_symbol["ETHUSDT"][-1]["raw_message_count"] == 2
+    assert by_symbol["ETHUSDT"][-1]["observation_count"] == 2
+
+    eth_checkpoint = json.loads(
+        (tmp_path / "control" / "checkpoints" / "binance_usdm_liquidations_ETHUSDT.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert eth_checkpoint["symbol"] == "ETHUSDT"
+    assert eth_checkpoint["instrument_id"] == binance_identity("ETHUSDT").instrument_id
+
+
 def test_same_batch_exact_wire_replay_has_explicit_manifest_counts(tmp_path: Path):
     payload, raw = _wire(SELL_FIXTURE)
     result = persist_binance_liquidation_batch(
@@ -309,8 +480,8 @@ def test_empty_batch_and_unapproved_symbol_write_nothing(tmp_path: Path):
     result = persist_binance_liquidation_batch([], tmp_path)
     assert result["event_observation_status"] == "NO_EVENT_OBSERVED_WITHIN_WINDOW"
     assert not any(tmp_path.iterdir())
-    with pytest.raises(ValueError, match="restricted to BTCUSDT"):
-        persist_binance_liquidation_batch([], tmp_path, symbol="ETHUSDT")
+    with pytest.raises(ValueError, match="permit BTCUSDT/ETHUSDT"):
+        persist_binance_liquidation_batch([], tmp_path, symbol="SOLUSDT")
 
 
 @pytest.mark.anyio
@@ -392,4 +563,49 @@ async def test_bounded_zero_event_transport_is_not_an_acceptance_blocker(monkeyp
     result = await collect_binance_liquidations_live(tmp_path, max_duration_seconds=0)
     assert result["event_observation_status"] == "NO_EVENT_OBSERVED_WITHIN_WINDOW"
     assert result["capture_completeness"] == LOCAL_CAPTURE_COMPLETENESS
+    assert not any(tmp_path.iterdir())
+
+
+@pytest.mark.anyio
+async def test_eth_topic_btc_payload_mismatch_fails_before_authoritative_write(
+    monkeypatch, tmp_path: Path
+):
+    _, btc_raw = _wire(SELL_FIXTURE)
+    queue = [json.dumps({"result": None, "id": 1}), btc_raw]
+
+    class MockWebSocket:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, value):
+            self.sent.append(value)
+
+        async def recv(self):
+            return queue.pop(0)
+
+        async def ping(self):
+            future = asyncio.get_running_loop().create_future()
+            future.set_result(None)
+            return future
+
+    websocket = MockWebSocket()
+
+    class Context:
+        async def __aenter__(self):
+            return websocket
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    import websockets
+
+    monkeypatch.setattr(websockets, "connect", lambda *args, **kwargs: Context())
+    with pytest.raises(ValueError, match="Symbol mismatch"):
+        await collect_binance_liquidations_live(
+            tmp_path,
+            symbol="ETHUSDT",
+            max_messages=1,
+            max_duration_seconds=5,
+        )
+    assert json.loads(websocket.sent[0])["params"] == ["ethusdt@forceOrder"]
     assert not any(tmp_path.iterdir())
