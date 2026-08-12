@@ -185,6 +185,42 @@ def test_catalog_uses_latest_manifest_record_for_same_object(tmp_path: Path) -> 
     assert artifacts[0].manifest_record_number == 2
 
 
+def test_catalog_excludes_bucket_generation_from_superseded_trade_hash(tmp_path: Path) -> None:
+    trade, current_hash = _write_parquet(tmp_path, "normalized/trade.parquet", value=[1])
+    old_bucket, old_bucket_hash = _write_parquet(tmp_path, "derived/old.parquet", value=[1])
+    current_bucket, current_bucket_hash = _write_parquet(
+        tmp_path, "derived/current.parquet", value=[1]
+    )
+    reference = trade.relative_to(tmp_path).as_posix()
+    for digest in ("0" * 64, current_hash):
+        _append_manifest(
+            tmp_path,
+            "trades.jsonl",
+            {
+                "dataset_class": "individual_trade",
+                "object_id": reference,
+                "parquet_sha256": digest,
+            },
+        )
+    for path, digest, source_hash in (
+        (old_bucket, old_bucket_hash, "0" * 64),
+        (current_bucket, current_bucket_hash, current_hash),
+    ):
+        _append_manifest(
+            tmp_path,
+            "buckets.jsonl",
+            {
+                "dataset_class": "derived_trade_bucket",
+                "object_id": path.relative_to(tmp_path).as_posix(),
+                "parquet_sha256": digest,
+                "source_parquet_sha256": source_hash,
+            },
+        )
+    refs = {artifact.relative_path for artifact in resolve_active_artifacts(tmp_path)}
+    assert old_bucket.relative_to(tmp_path).as_posix() not in refs
+    assert current_bucket.relative_to(tmp_path).as_posix() in refs
+
+
 def test_policy_aware_freshness_does_not_invent_event_gap() -> None:
     now = datetime(2026, 8, 12, tzinfo=UTC)
     quiet = measure_freshness(

@@ -1,0 +1,61 @@
+policy_version: 1.0.0
+policies:
+  semantic_unique_key:
+    calibration_state: CALIBRATED
+    comparison: MAXIMUM
+    threshold: 0.0
+    failure_impact: UNAVAILABLE
+    evidence:
+      - accepted source/data contract defines the dataset natural or native key as unique
+  required_side:
+    calibration_state: CALIBRATED
+    comparison: MAXIMUM
+    threshold: 0.0
+    failure_impact: UNAVAILABLE
+    evidence:
+      - accepted source contract requires a classified side for every accepted row
+  exact_wire_replay:
+    calibration_state: CALIBRATED
+    comparison: MAXIMUM
+    threshold: 0.0
+    failure_impact: DEGRADE
+    evidence:
+      - accepted liquidation dedup guarantee covers exact wire replay only
+      - cross-envelope economic-event dedup remains not guaranteed
+  archive_freshness:
+    calibration_state: NOT_APPLICABLE
+    comparison: NONE
+    threshold: null
+    failure_impact: NONE
+    evidence:
+      - immutable historical archive/bootstrap objects are not operational realtime feeds
+  event_driven_freshness:
+    calibration_state: UNCALIBRATED
+    comparison: NONE
+    threshold: null
+    failure_impact: DEGRADE
+    evidence:
+      - event inactivity does not prove transport failure or a gap
+      - accepted short soak is insufficient to calibrate an event-age threshold
+  synchronous_queue:
+    calibration_state: NOT_APPLICABLE
+    comparison: NONE
+    threshold: null
+    failure_impact: NONE
+    evidence:
+      - accepted liquidation soak records synchronous read/flush without a bounded queue
+  no_queue_telemetry:
+    calibration_state: UNCALIBRATED
+    comparison: NONE
+    threshold: null
+    failure_impact: DEGRADE
+    evidence:
+      - no production-quality bounded-queue observation distribution is retained yet
+  gap_status_policy:
+    calibration_state: CALIBRATED
+    comparison: CATEGORICAL
+    threshold: null
+    failure_impact: UNAVAILABLE
+    evidence:
+      - GapRegistry is authoritative; UNRECOVERABLE gaps fail closed
+      - OPEN, PARTIAL, and UNKNOWN gaps degrade eligibility pending resolution

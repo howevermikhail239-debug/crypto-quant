@@ -8,6 +8,7 @@ import os
 import platform
 import sys
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -40,6 +41,14 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     for name in ("config-check", "health", "paths-init"):
         subparsers.add_parser(name)
+    dq_parser = subparsers.add_parser("dq-baseline")
+    dq_parser.add_argument("--observed-at", required=True)
+    dq_parser.add_argument(
+        "--policy",
+        type=Path,
+        default=repository_root() / "config" / "dq_thresholds.yaml",
+    )
+    dq_parser.add_argument("--output", type=Path)
     return parser
 
 
@@ -161,6 +170,34 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "paths-init":
             created = initialize_data_root(root)
             print(json.dumps({"status": "PASS", "created": [str(path) for path in created]}))
+            return 0
+        if args.command == "dq-baseline":
+            from .ingestion.dq_baseline import build_dq_baseline, write_dq_profile
+            from .storage.catalog import build_catalog
+
+            observed_at = datetime.fromisoformat(args.observed_at)
+            if observed_at.tzinfo is None or observed_at.utcoffset().total_seconds() != 0:
+                raise ValueError("dq-baseline --observed-at must be timezone-aware UTC")
+            catalog = build_catalog(root)
+            profile = build_dq_baseline(
+                catalog_path=catalog.catalog_path,
+                data_root=root,
+                policy_path=args.policy,
+                observed_at=observed_at,
+            )
+            output = args.output or root / "reports" / "dq" / "phase1e2-baseline-v1.json"
+            write_dq_profile(profile, output)
+            print(
+                json.dumps(
+                    {
+                        "status": "PASS",
+                        "output": str(output),
+                        "metrics": len(profile.metrics),
+                        "eligibility": profile.eligibility.value,
+                        "eligibility_reasons": list(profile.eligibility_reasons),
+                    }
+                )
+            )
             return 0
         checks = health_checks(config)
         from .ingestion.health import compute_collector_health

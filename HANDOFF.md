@@ -24,9 +24,9 @@
 ## C. CURRENT GIT STATE
 - **Branch:** master
 - **Accepted parent before PHASE 1E.1:** `0857da87c161e67a16ecd37fe69e40998ae58043`
-- **Current implementation:** PHASE 1E.1 FINAL DONE / ACCEPTED (see `docs/phase1e1-storage-operational-dq-report.md`)
-- **Working Tree:** expected clean after the PHASE 1E.1 acceptance commit
-- **Test Count:** 262 passed
+- **Current implementation:** PHASE 1E.2 IMPLEMENTED / READY FOR SHORT ACCEPTANCE (see `docs/phase1e2-dq-baseline-threshold-calibration-report.md`)
+- **Working Tree:** expected clean after the PHASE 1E.2 implementation commit
+- **Test Count:** 269 passed
 
 **Latest important commits:**
 - `HEAD` — independent acceptance of Phase 1D.3F, including four defect fixes and regression evidence
@@ -55,9 +55,10 @@
 - PHASE 1D.3D (Binance USD-M ETHUSDT Liquidations Parity): **FINAL DONE / ACCEPTED**
 - PHASE 1D.3F (Liquidation Soak / Gaps / Source-Local DQ): **FINAL DONE / ACCEPTED**
 - PHASE 1E.1 (Storage & Operational DQ Foundation): **FINAL DONE / ACCEPTED**
+- PHASE 1E.2 (DQ Baseline & Threshold Calibration): **IMPLEMENTED / READY FOR SHORT ACCEPTANCE**
 
 **Next Authorized Step:**
-- no later implementation package is authorized; threshold calibration, longer observation if required, final Data Quality Report, and remaining PHASE 1E gates stay separate
+- short independent acceptance of PHASE 1E.2 only; longer observation, final Data Quality Report, and remaining PHASE 1E gates stay separate
 
 ## E. DATA LOCATIONS
 - **Repository:** `C:\Users\Admin\Documents\ChatGPT\анализ крипты`
@@ -171,9 +172,16 @@ Until a verified source exists, missed realtime WS events are UNRECOVERABLE / UN
 - **CRITICAL IMPERATIVE:** DO NOT IMPLEMENT STRATEGY ENGINE NOW. This is purely an architectural reservation.
 
 ## N. CURRENT ACCEPTED CHECKPOINT
-**PHASE 1E.1 — FINAL DONE / ACCEPTED.**
+**PHASE 1E.2 — IMPLEMENTED / READY FOR SHORT ACCEPTANCE.**
+
+- Evidence: `docs/phase1e2-dq-baseline-threshold-calibration-report.md` and external `reports/dq/phase1e2-baseline-v1.json`.
+- Current baseline eligibility is `UNAVAILABLE`: 8 duplicate Binance USD-M BTCUSDT OHLCV natural keys are preserved as a fail-closed DQ finding.
+- Queue/high-watermark/writer-lag and event-driven freshness thresholds remain explicitly uncalibrated where evidence is insufficient.
 
 Previous accepted checkpoint:
+**PHASE 1E.1 — FINAL DONE / ACCEPTED.**
+
+Earlier accepted checkpoint:
 **PHASE 1D.3F — FINAL DONE / ACCEPTED.**
 
 - Implementation evidence: `docs/phase1d3f-liquidation-soak-dq-report.md`.

@@ -215,6 +215,18 @@ def resolve_active_artifacts(root: Path) -> tuple[ActiveArtifact, ...]:
                 dataset_class,
                 expected_hash,
             )
+    active_trade_hashes = {
+        expected_hash
+        for _normalized, (_manifest, _number, _row, dataset_class, expected_hash) in selected_by_reference.items()
+        if dataset_class == "individual_trade" and expected_hash
+    }
+    selected_by_reference = {
+        normalized: record
+        for normalized, record in selected_by_reference.items()
+        if record[3] != "derived_trade_bucket"
+        or not record[2].get("source_parquet_sha256")
+        or str(record[2]["source_parquet_sha256"]) in active_trade_hashes
+    }
     artifacts: dict[str, ActiveArtifact] = {}
     for normalized, record in selected_by_reference.items():
         manifest, number, row, dataset_class, expected_hash = record
