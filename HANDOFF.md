@@ -23,11 +23,10 @@
 
 ## C. CURRENT GIT STATE
 - **Branch:** master
-- **Parent HEAD before PHASE 1D.3F:** `db01156732b9846d1091ea02c218c6b494fe3076`
-- **Accepted implementation candidate:** `12162e417ae63bb30d4d38204b54686ac24534e4`
-- **HEAD after audit:** the commit containing `docs/phase1d3f-acceptance-report.md`
-- **Working Tree:** clean after the independent acceptance commit
-- **Test Count:** 255 passed
+- **Accepted parent before PHASE 1E.1:** `0857da87c161e67a16ecd37fe69e40998ae58043`
+- **Current implementation:** PHASE 1E.1 storage/operational-DQ checkpoint (see `docs/phase1e1-storage-operational-dq-report.md`)
+- **Working Tree:** expected clean after the PHASE 1E.1 checkpoint commit
+- **Test Count:** 262 passed
 
 **Latest important commits:**
 - `HEAD` — independent acceptance of Phase 1D.3F, including four defect fixes and regression evidence
@@ -55,9 +54,10 @@
 - PHASE 1D.3C (Binance USD-M BTCUSDT Liquidations): **FINAL DONE / ACCEPTED**
 - PHASE 1D.3D (Binance USD-M ETHUSDT Liquidations Parity): **FINAL DONE / ACCEPTED**
 - PHASE 1D.3F (Liquidation Soak / Gaps / Source-Local DQ): **FINAL DONE / ACCEPTED**
+- PHASE 1E.1 (Storage & Operational DQ Foundation): **IMPLEMENTED / READY FOR SHORT ACCEPTANCE**
 
 **Next Authorized Step:**
-- no later phase was started by this audit; require explicit user authorization and the governing phase gate before continuing
+- short independent acceptance of PHASE 1E.1 only; no later implementation phase is authorized
 
 ## E. DATA LOCATIONS
 - **Repository:** `C:\Users\Admin\Documents\ChatGPT\анализ крипты`
@@ -158,7 +158,7 @@ Until a verified source exists, missed realtime WS events are UNRECOVERABLE / UN
 - Binance USD-M ETHUSDT bounded Market WebSocket pilot verified transport/subscription/heartbeat; no genuine ETH event was observed, which is not an acceptance blocker.
 - Genuine Binance BTC raw → normalized → manifest → checkpoint lineage is accepted; raw and Parquet hashes independently reconciled.
 - Binance source completeness remains `INCOMPLETE_THROTTLED_SNAPSHOT`, selection rule `DOC_CONFLICT_LATEST_VS_LARGEST`.
-- PHASE 1D.3F remains responsible for longer soak, gaps, local completeness/DQ and cross-source operational behavior. Do not run infinite market-event waits now.
+- PHASE 1D.3F longer-soak/gap/source-local DQ responsibilities are completed and accepted. PHASE 1E.1 adds storage views and policy-aware operational DQ without redefining source completeness.
 
 ## M. STRATEGY ARCHITECTURE RESERVATION
 - **Critical Long-Term User Invariant:** The system in Phases 2–4 must support N independently versioned strategies without global redesign.
@@ -171,14 +171,18 @@ Until a verified source exists, missed realtime WS events are UNRECOVERABLE / UN
 - **CRITICAL IMPERATIVE:** DO NOT IMPLEMENT STRATEGY ENGINE NOW. This is purely an architectural reservation.
 
 ## N. CURRENT ACCEPTED CHECKPOINT
+**PHASE 1E.1 — IMPLEMENTED / READY FOR SHORT ACCEPTANCE.**
+
+Previous accepted checkpoint:
 **PHASE 1D.3F — FINAL DONE / ACCEPTED.**
 
 - Implementation evidence: `docs/phase1d3f-liquidation-soak-dq-report.md`.
 - Independent evidence and defect record: `docs/phase1d3f-acceptance-report.md`.
 - Accepted external run: `liq_soak_96d04877a3d64202807ac752e8976208`.
 - Audit fixes: explicit ACK evidence, durable flush on disconnect, fail-closed Bybit side semantics, and rejection of nonexistent run reconciliation.
-- Final validation: 255 tests PASS; Ruff/config/lock/data-root audit PASS.
-- **Do not add liquidation features, cross-exchange economic quantity comparisons, signals, strategies, models, Telegram, execution, or all-market architecture without a separate approved contract.**
+- PHASE 1E.1 evidence: `docs/phase1e1-storage-operational-dq-report.md`.
+- Final validation: 262 tests PASS; Ruff/config/lock/data-root immutability audit PASS.
+- **Do not begin the next PHASE 1E sub-slice, features, models, Telegram, paper/live execution, or final threshold calibration without a separate approved gate.**
 
 ## O. VALIDATION COMMANDS FOR NEXT AGENT
 Run these exactly as specified:
